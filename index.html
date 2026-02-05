@@ -20,7 +20,7 @@
 
 <body>
   <div class="layout">
-    <!-- SIDEBAR MINIMA -->
+    <!-- Sidebar minimale -->
     <aside class="sidebar">
       <div class="brand">
         <div class="brandLogo">A</div>
@@ -29,14 +29,21 @@
           <div class="brandSub">Upload &amp; Genera Excel</div>
         </div>
       </div>
+
+      <div class="sideCard">
+        <div class="sideTitle">Nota</div>
+        <div class="sideText">
+          I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
+        </div>
+      </div>
     </aside>
 
-    <!-- MAIN -->
+    <!-- Main -->
     <main class="main">
       <header class="topbar">
         <div>
           <div class="pageTitle">Report Clienti</div>
-          <div class="pageSubtitle">Carica i file e genera il report</div>
+          <div class="pageSubtitle">Carica i file da Albert e genera il report</div>
         </div>
       </header>
 
@@ -49,22 +56,22 @@
           <div class="panelBody">
             <div class="formGrid">
               <div class="field">
-                <label>1) Tabella Clienti (.xlsx)</label>
+                <label>Tabella Clienti (.xlsx)</label>
                 <input id="fileTabella" type="file" accept=".xlsx" />
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt; <b>Customers Summary / Riepilogo Clienti</b> &gt;
-                  selezionate la vostra sede &gt; in fondo alla pagina scaricare il file Excel da
+                  selezionate la vostra sede &gt; in fondo alla pagina scaricare il file excel da
                   <b>“Tabella Clienti (no filtro data)”</b>.
                 </div>
               </div>
 
               <div class="field">
-                <label>2) Sum_of (.xlsx)</label>
+                <label>Sum_of (.xlsx)</label>
                 <input id="fileSum" type="file" accept=".xlsx" />
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt; <b>By-Products / Sottoprodotti</b> &gt;
                   selezionate la vostra sede &gt; selezionate anno <b>2025</b> e <b>2026</b> &gt;
-                  in fondo alla pagina scaricare il file Excel dall’ultima tabella:
+                  in fondo alla pagina scaricare il file excel dall’ultima tabella:
                   <b>elenco di tutti i sottoprodotti divisi per classe attività</b>.
                 </div>
               </div>
@@ -74,24 +81,30 @@
               </div>
             </div>
 
-            <pre id="log" class="log"></pre>
-
-            <div class="note">
-              I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
-            </div>
+            <pre id="log" class="log" aria-live="polite"></pre>
           </div>
         </section>
       </section>
     </main>
   </div>
 
-  <!-- MODAL (OK / ERRORE) -->
+  <!-- MODAL ERRORE -->
   <div id="errModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errTitle">
     <div class="modalBox err">
       <div class="modalIcon"></div>
       <div id="errTitle" class="modalTitle">File errato</div>
-      <div id="errText" class="modalText">Carica il file corretto e riprova.</div>
+      <div class="modalText">Carica il file corretto e riprova.</div>
       <button id="errOk" class="modalBtn">OK</button>
+    </div>
+  </div>
+
+  <!-- MODAL OK -->
+  <div id="okModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="okTitle">
+    <div class="modalBox ok">
+      <div class="modalIcon"></div>
+      <div id="okTitle" class="modalTitle">File OK</div>
+      <div class="modalText">Verifica completata. Puoi generare il report.</div>
+      <button id="okOk" class="modalBtn">OK</button>
     </div>
   </div>
 </body>

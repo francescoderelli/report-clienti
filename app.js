@@ -1,10 +1,10 @@
 /* ============================================
-   app.js - Report Clienti (app1.0)
+   app.js - Report Clienti (app1.0 stabile)
    - Pyodide + pandas + openpyxl + python-dateutil
-   - Verifica automatica su singolo file appena caricato
-   - Modal "File errato" / "File OK" (senza alert browser)
-   - Genera report Excel (fix ID float: 3007.0 -> 3007)
-   - Output non corrotto (Uint8Array)
+   - Verifica automatica file (anche singolo) ROBUSTA: header non in prima riga
+   - Modal "File errato" e "File OK"
+   - Genera Report Excel (fix ID float 3007.0 -> 3007)
+   - Download non corrotto (Uint8Array)
 ============================================ */
 
 let pyodide = null;
@@ -13,16 +13,13 @@ const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
 const btnRun  = document.getElementById("btnRun");
 const logEl   = document.getElementById("log");
+const pill    = document.getElementById("pillStatus");
 
-// Modal errore (già nel tuo index)
 const errModal = document.getElementById("errModal");
 const errOk    = document.getElementById("errOk");
-
-// Modal OK (DEVI averlo in index: vedi nota in fondo)
 const okModal  = document.getElementById("okModal");
 const okOk     = document.getElementById("okOk");
 
-// Stato file
 const state = {
   tabOk: false,
   sumOk: false,
@@ -39,22 +36,22 @@ function clearLog(){
   if (!logEl) return;
   logEl.textContent = "";
 }
+function setPill(text){
+  if (!pill) return;
+  pill.textContent = text;
+}
 
-function showErrModal(){
-  if (!errModal) { alert("File errato"); return; }
-  errModal.classList.remove("hidden");
+function showModal(modal){
+  if (!modal) return;
+  modal.classList.remove("hidden");
 }
-function hideErrModal(){
-  if (!errModal) return;
-  errModal.classList.add("hidden");
+function hideModal(modal){
+  if (!modal) return;
+  modal.classList.add("hidden");
 }
-function showOkModal(){
-  if (!okModal) return;
-  okModal.classList.remove("hidden");
-}
-function hideOkModal(){
-  if (!okModal) return;
-  okModal.classList.add("hidden");
+
+function updateRunEnabled(){
+  btnRun.disabled = !(state.tabOk && state.sumOk);
 }
 
 async function readAsUint8Array(file){
@@ -62,22 +59,16 @@ async function readAsUint8Array(file){
   return new Uint8Array(buf);
 }
 
-function updateRunEnabled(){
-  btnRun.disabled = !(state.tabOk && state.sumOk);
-}
-
 async function init(){
   clearLog();
+  setPill("Caricamento Pyodide...");
   btnRun.disabled = true;
 
-  // Modal buttons
-  if (errOk) errOk.addEventListener("click", hideErrModal);
-  if (okOk)  okOk.addEventListener("click", hideOkModal);
+  if (errOk) errOk.addEventListener("click", () => hideModal(errModal));
+  if (okOk)  okOk.addEventListener("click",  () => hideModal(okModal));
 
-  // Hook file change
   fileTab.addEventListener("change", () => onFileSelected("tab"));
   fileSum.addEventListener("change", () => onFileSelected("sum"));
-
   btnRun.addEventListener("click", runReport);
 
   log("Carico Pyodide...");
@@ -86,33 +77,29 @@ async function init(){
   });
   log("Pyodide pronto.");
 
-  // pandas da pacchetto pyodide
-  log("Carico pandas...");
+  log("Carico pandas + micropip...");
   await pyodide.loadPackage(["pandas", "micropip"]);
+
   log("Installo openpyxl e python-dateutil...");
   await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
 `);
-  log("Pacchetti OK. Seleziona i file.");
+  log("Pacchetti OK.");
+  setPill("Pronto");
 }
 init().catch(e => {
   console.error(e);
+  setPill("Errore");
   log("Errore inizializzazione.");
 });
 
 async function onFileSelected(kind){
-  // kind: "tab" o "sum"
   if (!pyodide) return;
 
-  // reset stato di quel file
-  if (kind === "tab") {
-    state.tabOk = false;
-    state.tabBytes = null;
-  } else {
-    state.sumOk = false;
-    state.sumBytes = null;
-  }
+  // reset dello specifico file
+  if (kind === "tab") { state.tabOk = false; state.tabBytes = null; }
+  else { state.sumOk = false; state.sumBytes = null; }
   updateRunEnabled();
 
   const input = (kind === "tab") ? fileTab : fileSum;
@@ -122,102 +109,129 @@ async function onFileSelected(kind){
   log("Verifica file...");
 
   const bytes = await readAsUint8Array(input.files[0]);
-
-  // Verifica contenuto: colonne minime + score su header
-  // - Tabella: deve avere ID_SOGGETTO e Tipo e Cliente + colonne economiche
-  // - Sum_of : deve avere Anno/Mese + CodiceSoggetto + NomeSoggetto + Classe Attività
   pyodide.globals.set("FILE_BYTES", bytes);
 
+  // Verifica robusta: prova header normale, poi cerca header nelle prime righe
   const res = await pyodide.runPythonAsync(`
 import io
 import pandas as pd
 
-df = pd.read_excel(io.BytesIO(bytes(FILE_BYTES)), sheet_name=0)
+def norm_cols(cols):
+    return [str(c).strip().upper() for c in cols]
 
-cols = [str(c).strip().upper() for c in df.columns]
+def score(cols):
+    tab_must = {"ID_SOGGETTO","TIPO","CLIENTE"}
+    tab_bonus = ["RESPONSABILE","RESPONSABILEAREA","CONDOMINI IN ALBERT","CONDOMINI AMMINISTRATI",
+                 "PREVENTIVATO","DELIBERATO","FATTURATO","INCASSATO"]
+    sum_must = {"ANNO","MESE","CODICESOGGETTO","NOMESOGGETTO"}
+    sum_bonus = ["CLASSE ATTIV"]
 
-def score_tabella(cols):
-    s = 0
-    must = ["ID_SOGGETTO","TIPO","CLIENTE"]
-    for m in must:
-        if any(m == c for c in cols): s += 2
-    # bonus colonne tipiche
-    bonus = ["RESPONSABILE","CONDOMINI IN ALBERT","CONDOMINI AMMINISTRATI","PREVENTIVATO","DELIBERATO","FATTURATO","INCASSATO"]
-    for b in bonus:
-        if any(b in c for c in cols): s += 1
-    return s
+    cset = set(cols)
+    tab_s = 0
+    sum_s = 0
 
-def score_sumof(cols):
-    s = 0
-    must = ["ANNO","MESE","CODICESOGGETTO","NOMESOGGETTO","CLASSE ATTIVITÀ","CLASSE ATTIVITA"]
-    # anno/mese
-    if any("ANNO" == c for c in cols): s += 2
-    if any("MESE" == c for c in cols): s += 2
-    # codice/nome
-    if any("CODICESOGGETTO" == c or "CODICE SOGGETTO" == c for c in cols): s += 2
-    if any("NOMESOGGETTO" == c or "NOME SOGGETTO" == c for c in cols): s += 2
-    # classe attività
-    if any("CLASSE ATTIV" in c for c in cols): s += 2
-    return s
+    for m in tab_must:
+        if m in cset: tab_s += 3
+    for b in tab_bonus:
+        if any(b in c for c in cols): tab_s += 1
 
-tab_s = score_tabella(cols)
-sum_s = score_sumof(cols)
+    for m in sum_must:
+        if m in cset: sum_s += 3
+    for b in sum_bonus:
+        if any(b in c for c in cols): sum_s += 1
 
-is_tab = tab_s >= 5 and sum_s < 6
-is_sum = sum_s >= 6 and tab_s < 6
+    return tab_s, sum_s
 
-(df.shape[1], tab_s, sum_s, is_tab, is_sum)
+def classify(tab_s, sum_s):
+    if tab_s >= 6 and tab_s > sum_s + 1: return "tabella"
+    if sum_s >= 6 and sum_s > tab_s + 1: return "sumof"
+    return "unknown"
+
+xlsx = bytes(FILE_BYTES)
+
+best_kind = "unknown"
+best_score = -1
+best_ncols = 0
+
+# try 1: header normale
+try:
+    df1 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0)
+    cols1 = norm_cols(df1.columns)
+    t1, s1 = score(cols1)
+    sc1 = t1 + s1
+    k1 = classify(t1, s1)
+    if sc1 > best_score:
+        best_score = sc1
+        best_kind = k1
+        best_ncols = df1.shape[1]
+except Exception:
+    pass
+
+# try 2: header cercato
+df0 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0, header=None)
+
+header_row = None
+for i in range(min(80, len(df0))):
+    row = df0.iloc[i].astype(str).str.upper().str.strip().tolist()
+    if "ID_SOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row):
+        header_row = i
+        break
+    if "ANNO" in row and "MESE" in row and "CODICESOGGETTO" in row:
+        header_row = i
+        break
+
+if header_row is not None:
+    df2 = df0.copy()
+    df2.columns = df2.iloc[header_row].astype(str)
+    df2 = df2.iloc[header_row+1:].reset_index(drop=True)
+    cols2 = norm_cols(df2.columns)
+    t2, s2 = score(cols2)
+    sc2 = t2 + s2
+    k2 = classify(t2, s2)
+    if sc2 > best_score:
+        best_score = sc2
+        best_kind = k2
+        best_ncols = df2.shape[1]
+
+(best_kind, best_ncols)
 `);
 
-  const [nCols, tabScore, sumScore, isTab, isSum] = res.toJs();
+  const [kindFound, nCols] = res.toJs();
 
-  // Assegna stato in base al kind atteso e al contenuto
   let ok = false;
-  if (kind === "tab") ok = !!isTab;
-  if (kind === "sum") ok = !!isSum;
+  if (kind === "tab") ok = (kindFound === "tabella");
+  if (kind === "sum") ok = (kindFound === "sumof");
 
   if (!ok){
-    // file errato: modal e reset input
-    if (kind === "tab") {
-      fileTab.value = "";
-      state.tabOk = false;
-      state.tabBytes = null;
-    } else {
-      fileSum.value = "";
-      state.sumOk = false;
-      state.sumBytes = null;
-    }
+    // reset input + modal errore
+    if (kind === "tab") { fileTab.value = ""; state.tabOk = false; state.tabBytes = null; }
+    else { fileSum.value = ""; state.sumOk = false; state.sumBytes = null; }
     updateRunEnabled();
-    showErrModal();
+    showModal(errModal);
     return;
   }
 
-  // ok: salva bytes e flag
-  if (kind === "tab") {
-    state.tabOk = true;
-    state.tabBytes = bytes;
-  } else {
-    state.sumOk = true;
-    state.sumBytes = bytes;
-  }
+  // salva bytes
+  if (kind === "tab") { state.tabOk = true; state.tabBytes = bytes; }
+  else { state.sumOk = true; state.sumBytes = bytes; }
 
   updateRunEnabled();
 
-  // Se entrambi OK -> modal ok
+  // se entrambi ok -> modal ok
   if (state.tabOk && state.sumOk){
-    showOkModal();
+    showModal(okModal);
   }
 }
 
 async function runReport(){
   if (!(state.tabOk && state.sumOk)) return;
+
   clearLog();
   log("Genero report...");
 
   pyodide.globals.set("TAB_BYTES", state.tabBytes);
   pyodide.globals.set("SUM_BYTES", state.sumBytes);
 
-  // PY_REPORT: logica report (robusta con norm_id)
   const PY_REPORT = String.raw`
 import io, re
 import numpy as np
@@ -274,36 +288,35 @@ def activity_priority(a):
 tab = pd.read_excel(io.BytesIO(bytes(TAB_BYTES)))
 su  = pd.read_excel(io.BytesIO(bytes(SUM_BYTES)))
 
-# --- Tabella Clienti: usa NOMI se presenti, altrimenti fallback su lettere standard
-tab_cols = {str(c).strip().upper(): c for c in tab.columns}
-
-def col_any(tab, keys, fallback_idx=None):
+# --- helper per trovare colonne per nome (robusto)
+def pick_col(df, keys, fallback_idx=None):
+    cols = list(df.columns)
+    upmap = {str(c).strip().upper(): c for c in cols}
     for k in keys:
         ku = k.upper()
-        if ku in tab_cols:
-            return tab_cols[ku]
-    # contiene
-    for c in tab.columns:
+        if ku in upmap:
+            return upmap[ku]
+    for c in cols:
         cu = str(c).upper()
         for k in keys:
             if k.upper() in cu:
                 return c
-    # fallback su indice
-    if fallback_idx is not None and tab.shape[1] > fallback_idx:
-        return tab.columns[fallback_idx]
+    if fallback_idx is not None and df.shape[1] > fallback_idx:
+        return df.columns[fallback_idx]
     return None
 
-c_id   = col_any(tab, ["ID_SOGGETTO"], fallback_idx=8)     # spesso è I nei vecchi export
-c_tipo = col_any(tab, ["TIPO"], fallback_idx=15)
-c_cli  = col_any(tab, ["CLIENTE"], fallback_idx=9)
-c_ref  = col_any(tab, ["RESPONSABILE", "REFERENTE"], fallback_idx=7)
+# Tabella Clienti
+c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
+c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
+c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
+c_ref  = pick_col(tab, ["RESPONSABILE","REFERENTE"], fallback_idx=7)
 
-c_ca   = col_any(tab, ["CONDOMINI IN ALBERT"], fallback_idx=20)
-c_cam  = col_any(tab, ["CONDOMINI AMMINISTRATI"], fallback_idx=21)
-c_prev = col_any(tab, ["PREVENTIVATO"], fallback_idx=22)
-c_del  = col_any(tab, ["DELIBERATO"], fallback_idx=23)
-c_fat  = col_any(tab, ["FATTURATO"], fallback_idx=24)
-c_inc  = col_any(tab, ["INCASSATO"], fallback_idx=25)
+c_ca   = pick_col(tab, ["CONDOMINI IN ALBERT"], fallback_idx=20)
+c_cam  = pick_col(tab, ["CONDOMINI AMMINISTRATI"], fallback_idx=21)
+c_prev = pick_col(tab, ["PREVENTIVATO"], fallback_idx=22)
+c_del  = pick_col(tab, ["DELIBERATO"], fallback_idx=23)
+c_fat  = pick_col(tab, ["FATTURATO"], fallback_idx=24)
+c_inc  = pick_col(tab, ["INCASSATO"], fallback_idx=25)
 
 clients = pd.DataFrame({
     "ID_Soggetto": tab[c_id].apply(norm_id),
@@ -318,29 +331,13 @@ clients = pd.DataFrame({
     "INCASSATO_EUR": tab[c_inc] if c_inc else np.nan,
 })
 
-# --- Sum_of: nomi colonne
-su_cols = {str(c).strip().upper(): c for c in su.columns}
-
-def su_col_any(keys, fallback_idx=None):
-    for k in keys:
-        ku = k.upper()
-        if ku in su_cols:
-            return su_cols[ku]
-    for c in su.columns:
-        cu = str(c).upper()
-        for k in keys:
-            if k.upper() in cu:
-                return c
-    if fallback_idx is not None and su.shape[1] > fallback_idx:
-        return su.columns[fallback_idx]
-    return None
-
-s_anno = su_col_any(["ANNO"], fallback_idx=0)
-s_mese = su_col_any(["MESE"], fallback_idx=1)
-s_att  = su_col_any(["CLASSE ATTIVITÀ","CLASSE ATTIVITA","ATTIVITA","ATTIVITÀ"], fallback_idx=2)
-s_chi  = su_col_any(["RESPONSABILE","CHI"], fallback_idx=4)
-s_cod  = su_col_any(["CODICESOGGETTO","CODICE SOGGETTO"], fallback_idx=6)
-s_nome = su_col_any(["NOMESOGGETTO","NOME SOGGETTO"], fallback_idx=7)
+# Sum_of
+s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
+s_mese = pick_col(su, ["MESE"], fallback_idx=1)
+s_att  = pick_col(su, ["CLASSE ATTIVITÀ","CLASSE ATTIVITA","ATTIVITA","ATTIVITÀ"], fallback_idx=2)
+s_chi  = pick_col(su, ["RESPONSABILE","CHI"], fallback_idx=4)
+s_cod  = pick_col(su, ["CODICESOGGETTO","CODICE SOGGETTO"], fallback_idx=6)
+s_nome = pick_col(su, ["NOMESOGGETTO","NOME SOGGETTO"], fallback_idx=7)
 
 sumdf = pd.DataFrame({
     "Anno": su[s_anno],
@@ -395,7 +392,6 @@ header_overrides = {
     "INCASSATO_EUR":"Incassato €",
 }
 
-# --- Scrivi Excel in memoria
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     riepilogo = (final.assign(Tipo=final["Tipo"].fillna("Senza_Tipo"))
@@ -433,7 +429,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             for c in euro_cols:
                 ws.cell(row=r, column=c).number_format = euro_format
 
-    # Foglio amministratore: match robusto + colori + attivo
+    # Foglio amministratore: colori + attivo
     GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
     RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
     cutoff = date.today() - relativedelta(months=2)
@@ -471,7 +467,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         for col_idx, col_cells in enumerate(ws.columns, start=1):
             max_len = 0
             for cell in list(col_cells)[:2000]:
-                if cell.value is None: 
+                if cell.value is None:
                     continue
                 max_len = max(max_len, len(str(cell.value)))
             ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len+2, 45)
@@ -483,9 +479,8 @@ OUT_BYTES = out.read()
   try {
     await pyodide.runPythonAsync(PY_REPORT);
 
-    // Prendi bytes e scarica (no file corrotto)
     const outBytes = pyodide.globals.get("OUT_BYTES");
-    const u8 = new Uint8Array(outBytes.toJs()); // fondamentale
+    const u8 = new Uint8Array(outBytes.toJs()); // essenziale per non corrompere
     const blob = new Blob([u8], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     });
@@ -493,7 +488,6 @@ OUT_BYTES = out.read()
     log("Report creato: Report_Tipo_Clienti.xlsx");
   } catch (e) {
     console.error(e);
-    log("Errore durante la generazione.");
-    showErrModal();
+    showModal(errModal);
   }
 }

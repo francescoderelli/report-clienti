@@ -1,47 +1,70 @@
 // app.js - app1.0
-// - Log minimale: mostra solo "Caricamento..." durante init
-// - Verifica automatica per contenuto (no nome)
-// - Alert custom (modal) per "File errato" e "File OK"
-// - Abilita "Genera report" solo quando entrambi i file sono ok
+// - Log minimale: solo "Caricamento..." durante init
+// - Verifica automatica per contenuto (no nome) su singolo file appena caricato
+// - Modal custom (sidebar style): "File errato" / "File OK"
+// - Abilita "Genera report" solo quando entrambi i file sono OK
 // - Download xlsx non corrotto (PyProxy -> Uint8Array)
 
 let pyodide = null;
 
-const logEl = document.getElementById("log");
+const logEl  = document.getElementById("log");
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
 const btnRun  = document.getElementById("btnRun");
 
-// Modal (riusiamo lo stesso per OK/Errore)
+// Modal
 const errModal = document.getElementById("errModal");
 const errTitle = document.getElementById("errTitle");
+const errText  = document.getElementById("errText");
 const errOk    = document.getElementById("errOk");
+const modalBox = errModal.querySelector(".modalBox");
 
-function log(msg){
+function logOneLine(msg){
   logEl.textContent = msg + "\n";
 }
-function clearLog(){ logEl.textContent = ""; }
-
+function clearLog(){
+  logEl.textContent = "";
+}
 function bothSelected(){
   return fileTab.files.length === 1 && fileSum.files.length === 1;
 }
 
 function showModal(msg){
-  errTitle.textContent = msg;     // cambia testo (File errato / File OK)
+  modalBox.classList.remove("ok", "err");
+
+  if (msg === "File OK") {
+    modalBox.classList.add("ok");
+    errTitle.textContent = "File OK";
+    errText.textContent  = "Verifica superata. Puoi proseguire.";
+  } else if (msg === "File errato") {
+    modalBox.classList.add("err");
+    errTitle.textContent = "File errato";
+    errText.textContent  = "Carica il file corretto e riprova.";
+  } else if (msg === "Generazione report") {
+    modalBox.classList.add("ok");
+    errTitle.textContent = "Generazione report";
+    errText.textContent  = "Sto creando il file Excel...";
+  } else {
+    modalBox.classList.add("err");
+    errTitle.textContent = msg;
+    errText.textContent  = "";
+  }
+
   errModal.classList.remove("hidden");
   errOk.focus();
 }
+
 errOk.addEventListener("click", () => {
   errModal.classList.add("hidden");
 });
 
-// Stato: evita di sparare "File OK" 20 volte
+// Stato (per evitare "File OK" ripetuti)
 const state = {
+  initDone: false,
   tabOk: false,
   sumOk: false,
   alertedOkTab: false,
-  alertedOkSum: false,
-  initDone: false
+  alertedOkSum: false
 };
 
 async function readAsUint8Array(file){
@@ -362,36 +385,22 @@ OUT_BYTES = out.read()
 async function init(){
   clearLog();
   btnRun.disabled = true;
-
-  // Mostra solo caricamento
-  log("Caricamento...");
+  logOneLine("Caricamento...");
 
   try{
-    pyodide = await loadPyodide({
-      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
-    });
-
+    pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
     await pyodide.loadPackage(["pandas"]);
     await pyodide.loadPackage("micropip");
     await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
 `);
-
     state.initDone = true;
-    clearLog(); // pulito
-
-    // Listener
-    fileTab.addEventListener("change", () => onFileChanged("tabella"));
-    fileSum.addEventListener("change", () => onFileChanged("sum_of"));
-
-    // Click genera
-    btnRun.addEventListener("click", runReport);
-
+    clearLog();
   }catch(e){
     console.error(e);
     clearLog();
-    log("Errore caricamento.");
+    logOneLine("Errore caricamento.");
   }
 }
 init();
@@ -408,15 +417,13 @@ async function analyzeFile(file){
 }
 
 // -----------------------
-// VERIFY (auto) + alert "File OK"
+// VERIFY
 // -----------------------
-async function onFileChanged(expectedKind){
+async function verifySlot(expectedKind){
   if(!state.initDone) return;
 
   btnRun.disabled = true;
-  clearLog();
 
-  // reset alert singolo se cambi file
   if(expectedKind === "tabella") state.alertedOkTab = false;
   if(expectedKind === "sum_of")  state.alertedOkSum = false;
 
@@ -427,9 +434,9 @@ async function onFileChanged(expectedKind){
     const info = await analyzeFile(file);
 
     const minColsOk = (expectedKind === "tabella") ? (info.ncols >= 26) : (info.ncols >= 8);
-    const kindOk    = (info.kind === expectedKind); // match forte: niente unknown
+    const kindOk    = (info.kind === expectedKind); // match forte
 
-    const okSingle = minColsOk && kindOk;
+    const okSingle  = minColsOk && kindOk;
 
     if(expectedKind === "tabella") state.tabOk = okSingle;
     if(expectedKind === "sum_of")  state.sumOk = okSingle;
@@ -439,7 +446,7 @@ async function onFileChanged(expectedKind){
       return;
     }
 
-    // alert "File OK" per il singolo upload (solo una volta per file)
+    // alert "File OK" per singolo file (una volta)
     if(expectedKind === "tabella" && !state.alertedOkTab){
       state.alertedOkTab = true;
       showModal("File OK");
@@ -449,7 +456,7 @@ async function onFileChanged(expectedKind){
       showModal("File OK");
     }
 
-    // se entrambi presenti, verifica incrociata e abilita
+    // se entrambi presenti, abilita solo se ok entrambi
     if(bothSelected()){
       const tabInfo = await analyzeFile(fileTab.files[0]);
       const sumInfo = await analyzeFile(fileSum.files[0]);
@@ -466,25 +473,26 @@ async function onFileChanged(expectedKind){
       }
 
       btnRun.disabled = false;
-      // opzionale: scrivi una riga discreta nel log
-      log("Pronto. Puoi generare il report.");
+      logOneLine("Pronto. Puoi generare il report.");
     }
-
   }catch(e){
     console.error(e);
     showModal("File errato");
   }
 }
 
+// Eventi (dopo init: i listener possono stare anche qui)
+fileTab.addEventListener("change", () => { clearLog(); verifySlot("tabella"); });
+fileSum.addEventListener("change", () => { clearLog(); verifySlot("sum_of"); });
+
+btnRun.addEventListener("click", runReport);
+
 // -----------------------
 // RUN REPORT
 // -----------------------
 async function runReport(){
-  clearLog();
   btnRun.disabled = true;
-
-  // piccolo feedback minimo
-  log("Generazione report...");
+  logOneLine("Generazione report...");
 
   try{
     const tabBytes = await readAsUint8Array(fileTab.files[0]);
@@ -504,13 +512,12 @@ async function runReport(){
     });
     saveAs(blob, "Report_Tipo_Clienti.xlsx");
 
-    clearLog();
-    log("Report scaricato.");
+    logOneLine("Report scaricato.");
 
   }catch(e){
     console.error(e);
-    clearLog();
     showModal("Errore generazione");
+    clearLog();
   }finally{
     btnRun.disabled = false;
   }

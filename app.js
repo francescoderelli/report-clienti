@@ -20,12 +20,25 @@ async function init(){
 
   // Pacchetti: pandas + openpyxl + python-dateutil
   log("Installo pacchetti Python (pandas, openpyxl, python-dateutil)...");
-  await pyodide.loadPackage(["pandas"]); // openpyxl e dateutil li installiamo via micropip
-  await pyodide.runPythonAsync(`
+
+// 1) pandas
+log("Scarico pandas...");
+await pyodide.loadPackage(["pandas"]);
+log("pandas OK.");
+
+// 2) micropip (QUESTO è il fix)
+log("Carico micropip...");
+await pyodide.loadPackage("micropip");
+log("micropip OK.");
+
+// 3) openpyxl + python-dateutil
+log("Installo openpyxl e python-dateutil...");
+await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
 `);
-  log("Pacchetti ok.");
+log("Pacchetti OK.");
+
 
   // abilita bottoni quando entrambi i file sono scelti
   const onChange = () => {

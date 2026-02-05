@@ -1,3 +1,11 @@
+// app.js - Report Clienti v1.2 (GitHub Pages + Pyodide)
+// - Verifica 2 file (Tabella_Clienti + Sum_of)
+// - Genera xlsx con fogli per Tipo + Riepilogo + Corrispondenza
+// - Format € su I-L, header con €
+// - Colora righe su foglio che contiene "amministr" (rosso se > 2 mesi)
+// - Apre l'xlsx sul foglio amministratore
+// - Download xlsx non corrotto (PyProxy -> Uint8Array)
+
 let pyodide = null;
 
 const logEl = document.getElementById("log");
@@ -6,15 +14,22 @@ const fileSum = document.getElementById("fileSum");
 const btnVerify = document.getElementById("btnVerify");
 const btnRun = document.getElementById("btnRun");
 
-function log(msg){ logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
-function clearLog(){ logEl.textContent = ""; }
-function bothSelected(){ return fileTab.files.length === 1 && fileSum.files.length === 1; }
+function log(msg) {
+  logEl.textContent += msg + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function clearLog() { logEl.textContent = ""; }
 
-async function readAsUint8Array(file){
+function bothSelected() {
+  return fileTab.files.length === 1 && fileSum.files.length === 1;
+}
+
+async function readAsUint8Array(file) {
   const buf = await file.arrayBuffer();
   return new Uint8Array(buf);
 }
 
+// Python: genera OUT_BYTES (bytes) in memoria
 const PY_REPORT = String.raw`
 import io, re
 import numpy as np
@@ -66,9 +81,11 @@ def activity_priority(a):
     if m2: return priority_map.get(m2.group(1), 0)
     return 0
 
+# --- leggi bytes da JS
 tab = pd.read_excel(io.BytesIO(bytes(TAB_BYTES)))
 su  = pd.read_excel(io.BytesIO(bytes(SUM_BYTES)))
 
+# --- Tabella Clienti: H I J P U V W X Y Z
 idx_H = excel_col_letter_to_index("H")
 idx_I = excel_col_letter_to_index("I")
 idx_J = excel_col_letter_to_index("J")
@@ -93,11 +110,12 @@ clients = pd.DataFrame({
     "INCASSATO_EUR": tab.iloc[:, idx_Z],
 })
 
-idx_A = excel_col_letter_to_index("A")
-idx_B = excel_col_letter_to_index("B")
-idx_C = excel_col_letter_to_index("C")
-idx_E = excel_col_letter_to_index("E")
-idx_G = excel_col_letter_to_index("G")
+# --- Sum_of: A B C E G H
+idx_A  = excel_col_letter_to_index("A")
+idx_B  = excel_col_letter_to_index("B")
+idx_C  = excel_col_letter_to_index("C")
+idx_E  = excel_col_letter_to_index("E")
+idx_G  = excel_col_letter_to_index("G")
 idx_Hs = excel_col_letter_to_index("H")
 
 sumdf = pd.DataFrame({
@@ -142,15 +160,18 @@ corrispondenza = (clients[["ID_Soggetto","Cliente_Tabella"]]
 final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
-output_cols = ["Cliente","Referente_Commerciale","Condomini_in_Albert","Condomini_Amministrati",
-               "Anno_Ultima_Attivita","Mese_Ultima_Attivita","Ultima_Attivita","Ultima_Attivita_Fatta_Da",
-               "PREVENTIVATO_EUR","DELIBERATO_EUR","FATTURATO_EUR","INCASSATO_EUR"]
+output_cols = [
+    "Cliente","Referente_Commerciale","Condomini_in_Albert","Condomini_Amministrati",
+    "Anno_Ultima_Attivita","Mese_Ultima_Attivita","Ultima_Attivita","Ultima_Attivita_Fatta_Da",
+    "PREVENTIVATO_EUR","DELIBERATO_EUR","FATTURATO_EUR","INCASSATO_EUR"
+]
 
+EURO = chr(8364)
 header_overrides = {
-    "PREVENTIVATO_EUR":"Preventivato €",
-    "DELIBERATO_EUR":"Deliberato €",
-    "FATTURATO_EUR":"Fatturato €",
-    "INCASSATO_EUR":"Incassato €",
+    "PREVENTIVATO_EUR": "Preventivato " + EURO,
+    "DELIBERATO_EUR":   "Deliberato "   + EURO,
+    "FATTURATO_EUR":    "Fatturato "    + EURO,
+    "INCASSATO_EUR":    "Incassato "    + EURO,
 }
 
 out = io.BytesIO()
@@ -176,7 +197,8 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     wb = writer.book
 
-    euro_format = u'€ #,##0.00'
+    # formato € e header I-L (col 9-12)
+    euro_format = EURO + ' #,##0.00'
     euro_cols = [9,10,11,12]
     type_sheets = [s for s in wb.sheetnames if s not in ("Riepilogo","Corrispondenza")]
     for sname in type_sheets:
@@ -189,6 +211,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             for c in euro_cols:
                 ws.cell(row=r, column=c).number_format = euro_format
 
+    # colorazione amministratore (match "amministr")
     GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
     RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
     cutoff = date.today() - relativedelta(months=2)
@@ -221,6 +244,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 ws.cell(r,c).fill = fill
         wb.active = wb.sheetnames.index(admin_sheet)
 
+    # auto-width
     for ws in wb.worksheets:
         for col_idx, col_cells in enumerate(ws.columns, start=1):
             max_len = 0
@@ -234,12 +258,15 @@ out.seek(0)
 OUT_BYTES = out.read()
 `;
 
-async function init(){
+// -----------------------
+// INIT
+// -----------------------
+async function init() {
   clearLog();
   btnVerify.disabled = true;
   btnRun.disabled = true;
 
-  try{
+  try {
     log("Carico Pyodide...");
     pyodide = await loadPyodide({
       indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
@@ -254,7 +281,7 @@ async function init(){
     await pyodide.loadPackage("micropip");
     log("micropip OK.");
 
-    log("Installo openpyxl e python-dateutil (può richiedere un po')...");
+    log("Installo openpyxl e python-dateutil (puo' richiedere un po')...");
     await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
@@ -272,20 +299,22 @@ await micropip.install(["openpyxl","python-dateutil"])
     btnRun.addEventListener("click", runReport);
 
     log("Seleziona i 2 file e clicca 'Verifica file'.");
-  }catch(e){
+  } catch (e) {
     log("ERRORE init:");
     log(String(e));
     console.error(e);
   }
 }
-
 init();
 
-async function verifyFiles(){
+// -----------------------
+// VERIFY
+// -----------------------
+async function verifyFiles() {
   clearLog();
   btnRun.disabled = true;
 
-  try{
+  try {
     log("Verifica file...");
 
     const tabBytes = await readAsUint8Array(fileTab.files[0]);
@@ -312,28 +341,31 @@ ok_sum = sum_cols >= 8
 `);
     const [tabCols, sumCols, okTab, okSum] = res.toJs();
 
-    log(\`Tabella Clienti: colonne = \${tabCols} (serve >= 26 fino a Z) -> \${okTab ? "OK" : "NON OK"}\`);
-    log(\`Sum_of: colonne = \${sumCols} (serve >= 8 fino a H) -> \${okSum ? "OK" : "NON OK"}\`);
+    log("Tabella Clienti: colonne = " + tabCols + " (serve >= 26 fino a Z) -> " + (okTab ? "OK" : "NON OK"));
+    log("Sum_of: colonne = " + sumCols + " (serve >= 8 fino a H) -> " + (okSum ? "OK" : "NON OK"));
 
-    if(okTab && okSum){
+    if (okTab && okSum) {
       log("Verifica superata. Puoi generare l'output.");
       btnRun.disabled = false;
-    }else{
+    } else {
       log("Verifica fallita: carica i file corretti.");
       btnRun.disabled = true;
     }
-  }catch(e){
+  } catch (e) {
     log("ERRORE verifica:");
     log(String(e));
     console.error(e);
   }
 }
 
-async function runReport(){
+// -----------------------
+// RUN REPORT
+// -----------------------
+async function runReport() {
   clearLog();
   btnRun.disabled = true;
 
-  try{
+  try {
     log("Genero output (v1.2)...");
 
     const tabBytes = await readAsUint8Array(fileTab.files[0]);
@@ -349,19 +381,20 @@ async function runReport(){
     const outBytes = outProxy.toJs({ create_proxies: false });
     outProxy.destroy();
 
-    // Debug rapido: deve essere "PK"
+    // Debug: un xlsx valido inizia con "PK"
     // log("Signature: " + String.fromCharCode(outBytes[0], outBytes[1]));
 
     const blob = new Blob([outBytes], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     });
     saveAs(blob, "Report_Tipo_Clienti.xlsx");
+
     log("Output creato e scaricato: Report_Tipo_Clienti.xlsx");
-  }catch(e){
+  } catch (e) {
     log("ERRORE generazione output:");
     log(String(e));
     console.error(e);
-  }finally{
+  } finally {
     btnRun.disabled = false;
   }
 }

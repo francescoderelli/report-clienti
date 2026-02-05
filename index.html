@@ -17,6 +17,14 @@
 </head>
 
 <body>
+  <!-- Overlay pulito (niente log) -->
+  <div id="loadingOverlay" class="overlay">
+    <div class="overlayBox">
+      <div class="spinner"></div>
+      <div class="overlayText">Caricamento in corso…</div>
+    </div>
+  </div>
+
   <div class="layout">
     <!-- Sidebar minimale -->
     <aside class="sidebar">
@@ -49,7 +57,7 @@
         <section class="panel">
           <div class="panelHead solid">
             <div class="panelTitle">Generatore Report</div>
-            <div class="panelPill" id="pillStatus">Carico...</div>
+            <!-- RIMOSSO: pillStatus (niente "Pronto" / "Carico") -->
           </div>
 
           <div class="panelBody">
@@ -79,7 +87,8 @@
               </div>
             </div>
 
-            <pre id="log" class="log" aria-live="polite"></pre>
+            <!-- RIMOSSO: finestra nera log -->
+            <!-- <pre id="log" class="log" aria-live="polite"></pre> -->
           </div>
         </section>
       </section>
@@ -101,7 +110,7 @@
     <div class="modalBox ok">
       <div class="modalIcon"></div>
       <div id="okTitle" class="modalTitle">File OK</div>
-      <div class="modalText">File verificato.</div>
+      <div class="modalText" id="okText">File verificato.</div>
       <button id="okOk" class="modalBtn okBtn">OK</button>
     </div>
   </div>

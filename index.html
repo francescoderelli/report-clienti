@@ -5,22 +5,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Report Clienti</title>
 
-  <!-- Favicon in root -->
   <link rel="icon" href="favicon.ico" type="image/x-icon" />
-
   <link rel="stylesheet" href="style.css" />
 
   <!-- Pyodide -->
   <script defer src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
   <!-- FileSaver -->
   <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
-
+  <!-- App -->
   <script defer src="app.js"></script>
 </head>
 
 <body>
   <div class="layout">
-    <!-- Sidebar minimale -->
     <aside class="sidebar">
       <div class="brand">
         <div class="brandLogo">A</div>
@@ -38,7 +35,6 @@
       </div>
     </aside>
 
-    <!-- Main -->
     <main class="main">
       <header class="topbar">
         <div>
@@ -51,6 +47,7 @@
         <section class="panel">
           <div class="panelHead teal">
             <div class="panelTitle">Generatore Report</div>
+            <div class="panelPill" id="pillStatus">Caricamento Pyodide...</div>
           </div>
 
           <div class="panelBody">
@@ -60,7 +57,7 @@
                 <input id="fileTabella" type="file" accept=".xlsx" />
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt; <b>Customers Summary / Riepilogo Clienti</b> &gt;
-                  selezionate la vostra sede &gt; in fondo alla pagina scaricare il file excel da
+                  selezionate la vostra sede &gt; in fondo pagina scaricare
                   <b>“Tabella Clienti (no filtro data)”</b>.
                 </div>
               </div>
@@ -70,9 +67,8 @@
                 <input id="fileSum" type="file" accept=".xlsx" />
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt; <b>By-Products / Sottoprodotti</b> &gt;
-                  selezionate la vostra sede &gt; selezionate anno <b>2025</b> e <b>2026</b> &gt;
-                  in fondo alla pagina scaricare il file excel dall’ultima tabella:
-                  <b>elenco di tutti i sottoprodotti divisi per classe attività</b>.
+                  selezionate sede &gt; selezionate anno <b>2025</b> e <b>2026</b> &gt; in fondo pagina scaricare il file
+                  dall’ultima tabella (sottoprodotti divisi per classe attività).
                 </div>
               </div>
 
@@ -94,7 +90,7 @@
       <div class="modalIcon"></div>
       <div id="errTitle" class="modalTitle">File errato</div>
       <div class="modalText">Carica il file corretto e riprova.</div>
-      <button id="errOk" class="modalBtn">OK</button>
+      <button id="errOk" class="modalBtn errBtn">OK</button>
     </div>
   </div>
 
@@ -104,7 +100,7 @@
       <div class="modalIcon"></div>
       <div id="okTitle" class="modalTitle">File OK</div>
       <div class="modalText">Verifica completata. Puoi generare il report.</div>
-      <button id="okOk" class="modalBtn">OK</button>
+      <button id="okOk" class="modalBtn okBtn">OK</button>
     </div>
   </div>
 </body>

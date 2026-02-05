@@ -12,12 +12,13 @@
   <script defer src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
   <!-- FileSaver -->
   <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
-  <!-- App -->
+
   <script defer src="app.js"></script>
 </head>
 
 <body>
   <div class="layout">
+    <!-- Sidebar minimale -->
     <aside class="sidebar">
       <div class="brand">
         <div class="brandLogo">A</div>
@@ -35,6 +36,7 @@
       </div>
     </aside>
 
+    <!-- Main -->
     <main class="main">
       <header class="topbar">
         <div>
@@ -45,9 +47,9 @@
 
       <section class="content">
         <section class="panel">
-          <div class="panelHead teal">
+          <div class="panelHead solid">
             <div class="panelTitle">Generatore Report</div>
-            <div class="panelPill" id="pillStatus">Caricamento Pyodide...</div>
+            <div class="panelPill" id="pillStatus">Carico...</div>
           </div>
 
           <div class="panelBody">
@@ -67,8 +69,8 @@
                 <input id="fileSum" type="file" accept=".xlsx" />
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt; <b>By-Products / Sottoprodotti</b> &gt;
-                  selezionate sede &gt; selezionate anno <b>2025</b> e <b>2026</b> &gt; in fondo pagina scaricare il file
-                  dall’ultima tabella (sottoprodotti divisi per classe attività).
+                  selezionate sede &gt; selezionate anno <b>2025</b> e <b>2026</b> &gt;
+                  in fondo pagina scaricare il file dall’ultima tabella (sottoprodotti divisi per classe attività).
                 </div>
               </div>
 
@@ -99,7 +101,7 @@
     <div class="modalBox ok">
       <div class="modalIcon"></div>
       <div id="okTitle" class="modalTitle">File OK</div>
-      <div class="modalText">Verifica completata. Puoi generare il report.</div>
+      <div class="modalText">File verificato.</div>
       <button id="okOk" class="modalBtn okBtn">OK</button>
     </div>
   </div>

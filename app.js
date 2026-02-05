@@ -1,10 +1,12 @@
 /* ============================================
    app.js - Report Clienti (app1.0 stabile)
-   - Pyodide + pandas + openpyxl + python-dateutil
-   - Verifica automatica file (anche singolo) ROBUSTA: header non in prima riga
-   - Modal "File errato" e "File OK"
-   - Genera Report Excel (fix ID float 3007.0 -> 3007)
-   - Download non corrotto (Uint8Array)
+   MODIFICHE:
+   - Niente log visibile (logEl rimosso)
+   - Niente pillStatus (rimosso)
+   - Overlay pulito durante init
+   - stdout/stderr Pyodide silenziati
+   - Modal "File OK" anche quando carichi un singolo file
+   - Run abilitato solo quando entrambi i file sono OK
 ============================================ */
 
 let pyodide = null;
@@ -12,13 +14,14 @@ let pyodide = null;
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
 const btnRun  = document.getElementById("btnRun");
-const logEl   = document.getElementById("log");
-const pill    = document.getElementById("pillStatus");
 
 const errModal = document.getElementById("errModal");
 const errOk    = document.getElementById("errOk");
 const okModal  = document.getElementById("okModal");
 const okOk     = document.getElementById("okOk");
+const okText   = document.getElementById("okText");
+
+const overlay  = document.getElementById("loadingOverlay");
 
 const state = {
   tabOk: false,
@@ -27,19 +30,8 @@ const state = {
   sumBytes: null,
 };
 
-function log(msg){
-  if (!logEl) return;
-  logEl.textContent += msg + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
-}
-function clearLog(){
-  if (!logEl) return;
-  logEl.textContent = "";
-}
-function setPill(text){
-  if (!pill) return;
-  pill.textContent = text;
-}
+function showOverlay(){ if (overlay) overlay.classList.remove("hidden"); }
+function hideOverlay(){ if (overlay) overlay.classList.add("hidden"); }
 
 function showModal(modal){
   if (!modal) return;
@@ -60,9 +52,8 @@ async function readAsUint8Array(file){
 }
 
 async function init(){
-  clearLog();
-  setPill("Caricamento Pyodide...");
   btnRun.disabled = true;
+  showOverlay();
 
   if (errOk) errOk.addEventListener("click", () => hideModal(errModal));
   if (okOk)  okOk.addEventListener("click",  () => hideModal(okModal));
@@ -71,33 +62,42 @@ async function init(){
   fileSum.addEventListener("change", () => onFileSelected("sum"));
   btnRun.addEventListener("click", runReport);
 
-  log("Carico Pyodide...");
   pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
   });
-  log("Pyodide pronto.");
 
-  log("Carico pandas + micropip...");
+  // ✅ silenzia completamente stdout/stderr di pyodide (niente “tool loading”)
+  try {
+    pyodide.setStdout({ batched: (s) => {} });
+    pyodide.setStderr({ batched: (s) => {} });
+  } catch (_) {
+    // fallback: se setStdout non esiste, lo faremo in Python con redirect
+  }
+
   await pyodide.loadPackage(["pandas", "micropip"]);
 
-  log("Installo openpyxl e python-dateutil...");
+  // ✅ install silenziato anche lato Python (ulteriore sicurezza)
   await pyodide.runPythonAsync(`
+import sys, io
+sys.stdout = io.StringIO()
+sys.stderr = io.StringIO()
+
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
 `);
-  log("Pacchetti OK.");
-  setPill("Pronto");
+
+  hideOverlay();
 }
 init().catch(e => {
   console.error(e);
-  setPill("Errore");
-  log("Errore inizializzazione.");
+  hideOverlay();
+  showModal(errModal);
 });
 
 async function onFileSelected(kind){
   if (!pyodide) return;
 
-  // reset dello specifico file
+  // reset del file specifico
   if (kind === "tab") { state.tabOk = false; state.tabBytes = null; }
   else { state.sumOk = false; state.sumBytes = null; }
   updateRunEnabled();
@@ -105,13 +105,9 @@ async function onFileSelected(kind){
   const input = (kind === "tab") ? fileTab : fileSum;
   if (!input.files || input.files.length !== 1) return;
 
-  clearLog();
-  log("Verifica file...");
-
   const bytes = await readAsUint8Array(input.files[0]);
   pyodide.globals.set("FILE_BYTES", bytes);
 
-  // Verifica robusta: prova header normale, poi cerca header nelle prime righe
   const res = await pyodide.runPythonAsync(`
 import io
 import pandas as pd
@@ -196,14 +192,13 @@ if header_row is not None:
 (best_kind, best_ncols)
 `);
 
-  const [kindFound, nCols] = res.toJs();
+  const [kindFound] = res.toJs();
 
   let ok = false;
   if (kind === "tab") ok = (kindFound === "tabella");
   if (kind === "sum") ok = (kindFound === "sumof");
 
   if (!ok){
-    // reset input + modal errore
     if (kind === "tab") { fileTab.value = ""; state.tabOk = false; state.tabBytes = null; }
     else { fileSum.value = ""; state.sumOk = false; state.sumBytes = null; }
     updateRunEnabled();
@@ -211,23 +206,23 @@ if header_row is not None:
     return;
   }
 
-  // salva bytes
+  // salva bytes + stato
   if (kind === "tab") { state.tabOk = true; state.tabBytes = bytes; }
   else { state.sumOk = true; state.sumBytes = bytes; }
 
   updateRunEnabled();
 
-  // se entrambi ok -> modal ok
-  if (state.tabOk && state.sumOk){
-    showModal(okModal);
+  // ✅ Modal OK anche per singolo file
+  if (okText){
+    okText.textContent = (kind === "tab")
+      ? "Tabella Clienti verificata."
+      : "Sum_of verificato.";
   }
+  showModal(okModal);
 }
 
 async function runReport(){
   if (!(state.tabOk && state.sumOk)) return;
-
-  clearLog();
-  log("Genero report...");
 
   pyodide.globals.set("TAB_BYTES", state.tabBytes);
   pyodide.globals.set("SUM_BYTES", state.sumBytes);
@@ -284,11 +279,9 @@ def activity_priority(a):
     if m2: return priority_map.get(m2.group(1), 0)
     return 0
 
-# --- leggi bytes
 tab = pd.read_excel(io.BytesIO(bytes(TAB_BYTES)))
 su  = pd.read_excel(io.BytesIO(bytes(SUM_BYTES)))
 
-# --- helper per trovare colonne per nome (robusto)
 def pick_col(df, keys, fallback_idx=None):
     cols = list(df.columns)
     upmap = {str(c).strip().upper(): c for c in cols}
@@ -415,7 +408,6 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     wb = writer.book
 
-    # Formato € su I-L e header
     euro_format = u'€ #,##0.00'
     euro_cols = [9,10,11,12]
     type_sheets = [s for s in wb.sheetnames if s not in ("Riepilogo","Corrispondenza")]
@@ -429,7 +421,6 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             for c in euro_cols:
                 ws.cell(row=r, column=c).number_format = euro_format
 
-    # Foglio amministratore: colori + attivo
     GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
     RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
     cutoff = date.today() - relativedelta(months=2)
@@ -462,7 +453,6 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 ws.cell(r,c).fill = fill
         wb.active = wb.sheetnames.index(admin_sheet)
 
-    # Auto-width
     for ws in wb.worksheets:
         for col_idx, col_cells in enumerate(ws.columns, start=1):
             max_len = 0
@@ -480,12 +470,11 @@ OUT_BYTES = out.read()
     await pyodide.runPythonAsync(PY_REPORT);
 
     const outBytes = pyodide.globals.get("OUT_BYTES");
-    const u8 = new Uint8Array(outBytes.toJs()); // essenziale per non corrompere
+    const u8 = new Uint8Array(outBytes.toJs());
     const blob = new Blob([u8], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     });
     saveAs(blob, "Report_Tipo_Clienti.xlsx");
-    log("Report creato: Report_Tipo_Clienti.xlsx");
   } catch (e) {
     console.error(e);
     showModal(errModal);

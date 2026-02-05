@@ -1,10 +1,4 @@
-// app.js - app1.0 + verifica automatica immediata (per contenuto, non per nome)
-// Requisiti in index.html:
-//  - input#fileTabella, input#fileSum
-//  - button#btnRun (Genera output)
-//  - pre#log
-//  - (opzionale) button#btnVerify hidden (puo' restare nel DOM senza usarlo)
-//  - pyodide.js + FileSaver caricati prima di questo file
+// app.js - app1.0 + verifica automatica immediata per contenuto (no nome) + modal "File errato"
 
 let pyodide = null;
 
@@ -13,29 +7,37 @@ const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
 const btnRun = document.getElementById("btnRun");
 
-function log(msg) {
+// Modal errore custom
+const errModal = document.getElementById("errModal");
+const errOk = document.getElementById("errOk");
+
+function log(msg){
   logEl.textContent += msg + "\n";
   logEl.scrollTop = logEl.scrollHeight;
 }
-function clearLog() { logEl.textContent = ""; }
+function clearLog(){ logEl.textContent = ""; }
 
-function bothSelected() {
+function bothSelected(){
   return fileTab.files.length === 1 && fileSum.files.length === 1;
 }
 
-function alertFileErrato() {
-  alert("File errato");
+function showFileErrato(){
+  errModal.classList.remove("hidden");
+  errOk.focus();
 }
+errOk.addEventListener("click", () => {
+  errModal.classList.add("hidden");
+});
 
-async function readAsUint8Array(file) {
+// lettura file
+async function readAsUint8Array(file){
   const buf = await file.arrayBuffer();
   return new Uint8Array(buf);
 }
 
 // -----------------------
 // PY: analisi contenuto (NON nome)
-// - classifica come "tabella" / "sum_of" / "unknown"
-// - ritorna anche ncols e score
+// ritorna: kind ("tabella"|"sum_of"|"unknown"), ncols, score_tab, score_sum
 // -----------------------
 const PY_ANALYZE = String.raw`
 import io, re
@@ -50,7 +52,6 @@ def excel_col_letter_to_index(letter: str) -> int:
     return n - 1
 
 df = pd.read_excel(io.BytesIO(bytes(ONE_FILE_BYTES)), sheet_name=0)
-
 ncols = int(df.shape[1])
 
 def safe_col(i):
@@ -58,8 +59,7 @@ def safe_col(i):
         return pd.Series([], dtype="object")
     return df.iloc[:, i]
 
-# ---- segnali "sum_of"
-# A=Anno plausibile, B=Mese plausibile, C contiene codici attivita 01..07
+# segnali sum_of
 colA = safe_col(0)
 colB = safe_col(1)
 colC = safe_col(2).astype(str).str.lower()
@@ -78,8 +78,7 @@ has_month = (
     or b_str.str.contains(r"gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic").any()
 )
 
-# ---- segnali "tabella"
-# P=Tipo (testuale), e presenza di valori numerici in blocco W..Z se ci sono abbastanza colonne
+# segnali tabella
 idx_P = excel_col_letter_to_index("P")
 colP = safe_col(idx_P).astype(str).str.lower()
 has_tipo_like = colP.str.contains(r"amministr|condomin|ente|privat|azienda|tipo|cliente").any()
@@ -95,7 +94,6 @@ if ncols > idx_Z:
     except:
         has_money_like = False
 
-# ---- scoring
 score_sum = 0
 score_tab = 0
 
@@ -346,13 +344,13 @@ OUT_BYTES = out.read()
 `;
 
 // -----------------------
-// PYODIDE INIT
+// INIT
 // -----------------------
-async function init() {
+async function init(){
   clearLog();
   btnRun.disabled = true;
 
-  try {
+  try{
     log("Carico Pyodide...");
     pyodide = await loadPyodide({
       indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
@@ -372,90 +370,80 @@ async function init() {
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
 `);
-    clearLog(); // da qui in avanti niente log "tecnico"
+    clearLog();
 
-    // Verifica automatica immediata su ogni file caricato
     fileTab.addEventListener("change", () => onFileChanged("tabella"));
     fileSum.addEventListener("change", () => onFileChanged("sum_of"));
 
-    // Click genera
     btnRun.addEventListener("click", runReport);
 
-  } catch (e) {
+  }catch(e){
     clearLog();
     log("ERRORE init:");
     log(String(e));
     console.error(e);
   }
 }
-
 init();
 
 // -----------------------
-// CONTENT-BASED ANALYZE
+// CONTENT-BASED CHECK
 // -----------------------
-async function analyzeFile(file) {
+async function analyzeFile(file){
   const bytes = await readAsUint8Array(file);
   pyodide.globals.set("ONE_FILE_BYTES", bytes);
   const res = await pyodide.runPythonAsync(PY_ANALYZE);
-  const [kind, ncols, scoreTab, scoreSum] = res.toJs();
-  return { kind, ncols, scoreTab, scoreSum };
+  const [kind, ncols] = res.toJs();
+  return { kind, ncols };
 }
 
-async function onFileChanged(slotExpectedKind) {
-  // slotExpectedKind: "tabella" per fileTab, "sum_of" per fileSum
+async function onFileChanged(expectedKind){
   btnRun.disabled = true;
   clearLog();
 
-  const file = (slotExpectedKind === "tabella") ? fileTab.files[0] : fileSum.files[0];
-  if (!file) return;
+  const file = (expectedKind === "tabella") ? fileTab.files[0] : fileSum.files[0];
+  if(!file) return;
 
-  try {
+  try{
     const info = await analyzeFile(file);
 
-    // Regole minime per "contenuto"
-    // - tabella deve risultare kind=tabella (non unknown/sum_of) e avere abbastanza colonne
-    // - sum_of deve risultare kind=sum_of (non unknown/tabella) e avere abbastanza colonne
-    const minColsOk = (slotExpectedKind === "tabella") ? (info.ncols >= 26) : (info.ncols >= 8);
+    const minColsOk = (expectedKind === "tabella") ? (info.ncols >= 26) : (info.ncols >= 8);
+    const kindOk = (info.kind === expectedKind); // match forte, niente unknown
 
-    const kindOk = (info.kind === slotExpectedKind); // vogliamo match "forte": niente unknown
-    if (!minColsOk || !kindOk) {
-      alertFileErrato();
+    if(!minColsOk || !kindOk){
+      showFileErrato();
       return;
     }
 
-    // Se entrambi presenti: verifica incrociata (anche qui SOLO alert in caso errore)
-    if (bothSelected()) {
+    if(bothSelected()){
       const tabInfo = await analyzeFile(fileTab.files[0]);
       const sumInfo = await analyzeFile(fileSum.files[0]);
 
       const okTab = (tabInfo.kind === "tabella" && tabInfo.ncols >= 26);
       const okSum = (sumInfo.kind === "sum_of" && sumInfo.ncols >= 8);
 
-      if (!okTab || !okSum) {
-        alertFileErrato();
+      if(!okTab || !okSum){
+        showFileErrato();
         btnRun.disabled = true;
         return;
       }
 
-      // tutto ok -> abilita output (silenzioso)
       btnRun.disabled = false;
     }
-
-  } catch (e) {
+  }catch(e){
     console.error(e);
-    alertFileErrato();
+    showFileErrato();
   }
 }
 
 // -----------------------
 // RUN REPORT
 // -----------------------
-async function runReport() {
+async function runReport(){
   clearLog();
   btnRun.disabled = true;
 
-  try {
+  try{
     const tabBytes = await readAsUint8Array(fileTab.files[0]);
     const sumBytes = await readAsUint8Array(fileSum.files[0]);
 
@@ -464,7 +452,6 @@ async function runReport() {
 
     await pyodide.runPythonAsync(PY_REPORT);
 
-    // Download non corrotto: PyProxy -> Uint8Array
     const outProxy = pyodide.globals.get("OUT_BYTES");
     const outBytes = outProxy.toJs({ create_proxies: false });
     outProxy.destroy();
@@ -474,10 +461,10 @@ async function runReport() {
     });
     saveAs(blob, "Report_Tipo_Clienti.xlsx");
 
-  } catch (e) {
+  }catch(e){
     console.error(e);
     alert("Errore generazione file");
-  } finally {
+  }finally{
     btnRun.disabled = false;
   }
 }

@@ -1,13 +1,13 @@
 // app.js - app1.0
 // - Log minimale: solo "Caricamento..." durante init
-// - Verifica automatica per contenuto (no nome) su singolo file appena caricato
-// - Modal custom (sidebar style): "File errato" / "File OK"
+// - Verifica automatica per contenuto (no nome) appena carichi ciascun file
+// - Modal custom (stile sidebar): "File errato" / "File OK"
 // - Abilita "Genera report" solo quando entrambi i file sono OK
 // - Download xlsx non corrotto (PyProxy -> Uint8Array)
 
 let pyodide = null;
 
-const logEl  = document.getElementById("log");
+const logEl   = document.getElementById("log");
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
 const btnRun  = document.getElementById("btnRun");
@@ -29,24 +29,24 @@ function bothSelected(){
   return fileTab.files.length === 1 && fileSum.files.length === 1;
 }
 
-function showModal(msg){
+function showModal(type){
   modalBox.classList.remove("ok", "err");
 
-  if (msg === "File OK") {
+  if (type === "ok") {
     modalBox.classList.add("ok");
     errTitle.textContent = "File OK";
     errText.textContent  = "Verifica superata. Puoi proseguire.";
-  } else if (msg === "File errato") {
+  } else if (type === "err") {
     modalBox.classList.add("err");
     errTitle.textContent = "File errato";
     errText.textContent  = "Carica il file corretto e riprova.";
-  } else if (msg === "Generazione report") {
+  } else if (type === "gen") {
     modalBox.classList.add("ok");
     errTitle.textContent = "Generazione report";
     errText.textContent  = "Sto creando il file Excel...";
   } else {
     modalBox.classList.add("err");
-    errTitle.textContent = msg;
+    errTitle.textContent = "Errore";
     errText.textContent  = "";
   }
 
@@ -434,7 +434,7 @@ async function verifySlot(expectedKind){
     const info = await analyzeFile(file);
 
     const minColsOk = (expectedKind === "tabella") ? (info.ncols >= 26) : (info.ncols >= 8);
-    const kindOk    = (info.kind === expectedKind); // match forte
+    const kindOk    = (info.kind === expectedKind);
 
     const okSingle  = minColsOk && kindOk;
 
@@ -442,21 +442,20 @@ async function verifySlot(expectedKind){
     if(expectedKind === "sum_of")  state.sumOk = okSingle;
 
     if(!okSingle){
-      showModal("File errato");
+      showModal("err");
       return;
     }
 
     // alert "File OK" per singolo file (una volta)
     if(expectedKind === "tabella" && !state.alertedOkTab){
       state.alertedOkTab = true;
-      showModal("File OK");
+      showModal("ok");
     }
     if(expectedKind === "sum_of" && !state.alertedOkSum){
       state.alertedOkSum = true;
-      showModal("File OK");
+      showModal("ok");
     }
 
-    // se entrambi presenti, abilita solo se ok entrambi
     if(bothSelected()){
       const tabInfo = await analyzeFile(fileTab.files[0]);
       const sumInfo = await analyzeFile(fileSum.files[0]);
@@ -468,7 +467,7 @@ async function verifySlot(expectedKind){
         state.tabOk = false;
         state.sumOk = false;
         btnRun.disabled = true;
-        showModal("File errato");
+        showModal("err");
         return;
       }
 
@@ -477,11 +476,10 @@ async function verifySlot(expectedKind){
     }
   }catch(e){
     console.error(e);
-    showModal("File errato");
+    showModal("err");
   }
 }
 
-// Eventi (dopo init: i listener possono stare anche qui)
 fileTab.addEventListener("change", () => { clearLog(); verifySlot("tabella"); });
 fileSum.addEventListener("change", () => { clearLog(); verifySlot("sum_of"); });
 

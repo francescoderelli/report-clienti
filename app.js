@@ -288,15 +288,27 @@ await micropip.install(["openpyxl","python-dateutil"])
 `);
     log("Pacchetti OK.");
 
-    const onChange = () => {
-      btnVerify.disabled = !bothSelected();
-      btnRun.disabled = true;
-    };
-    fileTab.addEventListener("change", onChange);
-    fileSum.addEventListener("change", onChange);
+    const onChange = async () => {
+  btnRun.disabled = true;
 
-    btnVerify.addEventListener("click", verifyFiles);
-    btnRun.addEventListener("click", runReport);
+  // se manca uno dei due file, non verifico
+  if (!bothSelected()) {
+    btnVerify.disabled = true;   // lo lasciamo ma di fatto non serve più
+    return;
+  }
+
+  btnVerify.disabled = true;     // lo disabilito: verifica automatica
+  await verifyFiles();           // verifica automatica appena ci sono entrambi
+};
+
+fileTab.addEventListener("change", onChange);
+fileSum.addEventListener("change", onChange);
+
+// il bottone Verifica non serve più, lo puoi lasciare disabilitato
+btnVerify.disabled = true;
+// se vuoi anche nasconderlo, lo facciamo dopo in index.html
+
+btnRun.addEventListener("click", runReport);
 
     log("Seleziona i 2 file e clicca 'Verifica file'.");
   } catch (e) {
@@ -311,8 +323,8 @@ init();
 // VERIFY
 // -----------------------
 async function verifyFiles() {
-  clearLog();
   btnRun.disabled = true;
+log("Verifica automatica...");
 
   try {
     log("Verifica file...");

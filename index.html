@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Report Clienti (v1.2)</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Pyodide -->
+  <script defer src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+  <!-- FileSaver per download -->
+  <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Report Clienti – Upload & Genera Excel</h1>
+
+    <div class="card">
+      <label>1) Tabella Clienti (.xlsx)</label>
+      <input id="fileTabella" type="file" accept=".xlsx" />
+
+      <label>2) Sum_of (.xlsx)</label>
+      <input id="fileSum" type="file" accept=".xlsx" />
+
+      <div class="row">
+        <button id="btnVerify" disabled>Verifica file</button>
+        <button id="btnRun" disabled>Genera output</button>
+      </div>
+
+      <pre id="log"></pre>
+    </div>
+
+    <p class="note">
+      I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
+    </p>
+  </div>
+</body>
+</html>

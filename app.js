@@ -1,4 +1,5 @@
 // app.js (v1.2) - GitHub Pages + Pyodide
+// FIX: download xlsx NON corrotto (convert PyProxy -> Uint8Array)
 
 let pyodide = null;
 
@@ -41,7 +42,7 @@ async function init() {
     log("pandas OK.");
 
     log("Carico micropip...");
-    await pyodide.loadPackage("micropip"); // <-- FIX fondamentale
+    await pyodide.loadPackage("micropip");
     log("micropip OK.");
 
     log("Installo openpyxl e python-dateutil (può richiedere un po')...");
@@ -51,7 +52,6 @@ await micropip.install(["openpyxl","python-dateutil"])
 `);
     log("Pacchetti OK.");
 
-    // abilita bottoni quando entrambi i file sono scelti
     const onChange = () => {
       btnVerify.disabled = !bothSelected();
       btnRun.disabled = true;
@@ -250,4 +250,140 @@ best_last = (best_in_month.sort_values(["ID_Soggetto","Periodo","Prio","_row"])
                         .groupby("ID_Soggetto", as_index=False)
                         .tail(1))
 
-last_act = best_last[["ID]()]()
+last_act = best_last[["ID_Soggetto","Anno","Mese_num","Attivita","Chi"]].copy()
+last_act.rename(columns={
+    "Anno":"Anno_Ultima_Attivita",
+    "Mese_num":"Mese_Ultima_Attivita",
+    "Attivita":"Ultima_Attivita",
+    "Chi":"Ultima_Attivita_Fatta_Da"
+}, inplace=True)
+
+name_map = (sumdf[["ID_Soggetto","Nome_Soggetto_Sum"]]
+            .dropna(subset=["Nome_Soggetto_Sum"])
+            .drop_duplicates(subset=["ID_Soggetto"], keep="last"))
+
+corrispondenza = (clients[["ID_Soggetto","Cliente_Tabella"]]
+                  .merge(name_map, on="ID_Soggetto", how="left")
+                  .sort_values("ID_Soggetto"))
+
+final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
+final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
+
+output_cols = ["Cliente","Referente_Commerciale","Condomini_in_Albert","Condomini_Amministrati",
+               "Anno_Ultima_Attivita","Mese_Ultima_Attivita","Ultima_Attivita","Ultima_Attivita_Fatta_Da",
+               "PREVENTIVATO_EUR","DELIBERATO_EUR","FATTURATO_EUR","INCASSATO_EUR"]
+
+header_overrides = {
+    "PREVENTIVATO_EUR":"Preventivato €",
+    "DELIBERATO_EUR":"Deliberato €",
+    "FATTURATO_EUR":"Fatturato €",
+    "INCASSATO_EUR":"Incassato €",
+}
+
+# --- Scrivi Excel in memoria con openpyxl
+out = io.BytesIO()
+with pd.ExcelWriter(out, engine="openpyxl") as writer:
+    riepilogo = (final.assign(Tipo=final["Tipo"].fillna("Senza_Tipo"))
+                      .groupby("Tipo", dropna=False).size()
+                      .reset_index(name="N_clienti")
+                      .sort_values("N_clienti", ascending=False))
+    riepilogo.to_excel(writer, sheet_name="Riepilogo", index=False)
+    corrispondenza.to_excel(writer, sheet_name="Corrispondenza", index=False)
+
+    used = {"Riepilogo","Corrispondenza"}
+    for tipo, df_t in final.groupby(final["Tipo"].fillna("Senza_Tipo"), dropna=False):
+        sheet = sanitize_sheet_name(tipo)
+        base = sheet
+        k = 1
+        while sheet in used:
+            k += 1
+            suf = f"_{k}"
+            sheet = (base[:31-len(suf)] + suf)[:31]
+        used.add(sheet)
+        df_t.copy()[output_cols].to_excel(writer, sheet_name=sheet, index=False)
+
+    wb = writer.book
+
+    # Formato € e header I-L su fogli tipo
+    euro_format = u'€ #,##0.00'
+    euro_cols = [9,10,11,12]
+    type_sheets = [s for s in wb.sheetnames if s not in ("Riepilogo","Corrispondenza")]
+    for sname in type_sheets:
+        ws = wb[sname]
+        for col_idx in euro_cols:
+            cur = ws.cell(row=1, column=col_idx).value
+            if cur in header_overrides:
+                ws.cell(row=1, column=col_idx).value = header_overrides[cur]
+        for r in range(2, ws.max_row+1):
+            for c in euro_cols:
+                ws.cell(row=r, column=c).number_format = euro_format
+
+    # Foglio amministratore: match robusto + colori
+    GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
+    RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    cutoff = date.today() - relativedelta(months=2)
+    cutoff_period = cutoff.year*100 + cutoff.month
+
+    admin_sheet = None
+    for s in wb.sheetnames:
+        if s not in ("Riepilogo","Corrispondenza") and "amministr" in s.lower():
+            admin_sheet = s
+            break
+
+    if admin_sheet:
+        ws = wb[admin_sheet]
+        header = [c.value for c in ws[1]]
+        col_anno = header.index("Anno_Ultima_Attivita")+1
+        col_mese = header.index("Mese_Ultima_Attivita")+1
+        max_col = ws.max_column
+        for r in range(2, ws.max_row+1):
+            anno = ws.cell(r, col_anno).value
+            mese = ws.cell(r, col_mese).value
+            if anno is None or mese is None or str(anno).strip()=="" or str(mese).strip()=="":
+                fill = RED
+            else:
+                try:
+                    period = int(anno)*100 + int(mese)
+                    fill = RED if period < cutoff_period else GREEN
+                except:
+                    fill = RED
+            for c in range(1, max_col+1):
+                ws.cell(r,c).fill = fill
+        wb.active = wb.sheetnames.index(admin_sheet)
+
+    # Auto-width
+    for ws in wb.worksheets:
+        for col_idx, col_cells in enumerate(ws.columns, start=1):
+            max_len = 0
+            for cell in list(col_cells)[:2000]:
+                if cell.value is None:
+                    continue
+                max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len+2, 45)
+
+out.seek(0)
+OUT_BYTES = out.read()
+`);
+
+    // ===== FIX CRITICO: PyProxy -> Uint8Array reale =====
+    const outProxy = pyodide.globals.get("OUT_BYTES");
+    const outBytes = outProxy.toJs({ create_proxies: false }); // Uint8Array
+    outProxy.destroy();
+
+    // Optional debug: dovrebbe iniziare con "PK" (zip)
+    // log("Signature: " + String.fromCharCode(outBytes[0], outBytes[1]));
+
+    const blob = new Blob([outBytes], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    });
+
+    saveAs(blob, "Report_Tipo_Clienti.xlsx");
+    log("Output creato e scaricato: Report_Tipo_Clienti.xlsx");
+  } catch (e) {
+    log("ERRORE generazione output:");
+    log(String(e));
+    console.error(e);
+  } finally {
+    btnRun.disabled = false;
+  }
+}

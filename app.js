@@ -1,16 +1,16 @@
-// app.js - Report Clienti app1.0 + UX verifica immediata (single-file) + riconoscimento contenuto
-// - Verifica automatica appena carichi UNO dei due file (senza aspettare l'altro)
-// - Riconosce se il file "sembra" Tabella o Sum_of leggendo intestazioni / contenuto
-// - Quando entrambi presenti: verifica completa + abilita "Genera output"
-// - Genera xlsx con fogli per Tipo + Riepilogo + Corrispondenza, € e colori amministratori
-// - Download xlsx non corrotto (PyProxy -> Uint8Array)
+// app.js - app1.0 + verifica automatica immediata (per contenuto, non per nome)
+// Requisiti in index.html:
+//  - input#fileTabella, input#fileSum
+//  - button#btnRun (Genera output)
+//  - pre#log
+//  - (opzionale) button#btnVerify hidden (puo' restare nel DOM senza usarlo)
+//  - pyodide.js + FileSaver caricati prima di questo file
 
 let pyodide = null;
 
 const logEl = document.getElementById("log");
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
-const btnVerify = document.getElementById("btnVerify"); // presente ma hidden in HTML
 const btnRun = document.getElementById("btnRun");
 
 function log(msg) {
@@ -23,16 +23,24 @@ function bothSelected() {
   return fileTab.files.length === 1 && fileSum.files.length === 1;
 }
 
+function alertFileErrato() {
+  alert("File errato");
+}
+
 async function readAsUint8Array(file) {
   const buf = await file.arrayBuffer();
   return new Uint8Array(buf);
 }
 
 // -----------------------
-// PY: analisi "singolo file" (intestazioni + conteggio colonne + fingerprint)
+// PY: analisi contenuto (NON nome)
+// - classifica come "tabella" / "sum_of" / "unknown"
+// - ritorna anche ncols e score
 // -----------------------
-const PY_SINGLE_ANALYZE = String.raw`
-import io, pandas as pd, numpy as np, re
+const PY_ANALYZE = String.raw`
+import io, re
+import pandas as pd
+import numpy as np
 
 def excel_col_letter_to_index(letter: str) -> int:
     letter = letter.upper().strip()
@@ -41,62 +49,53 @@ def excel_col_letter_to_index(letter: str) -> int:
         n = n * 26 + (ord(ch) - ord('A') + 1)
     return n - 1
 
-# Leggiamo solo un po' (veloce)
 df = pd.read_excel(io.BytesIO(bytes(ONE_FILE_BYTES)), sheet_name=0)
 
 ncols = int(df.shape[1])
-colnames = [str(c).strip() for c in df.columns.tolist()]
-
-# Heuristic: Sum_of tipicamente ha colonne "Anno" e "Mese" in A,B (o simili)
-# e contiene codici attività tipo 01/02/03/04/05/06/07 in una colonna.
-# Tabella Clienti tipicamente ha "Tipo" in P e vari € in W..Z.
-# Qui NON dipendiamo dai nomi esatti, facciamo pattern su contenuto.
 
 def safe_col(i):
     if i < 0 or i >= df.shape[1]:
         return pd.Series([], dtype="object")
     return df.iloc[:, i]
 
-# prova: contenuto "attività" (col C = index 2)
-colC = safe_col(2).astype(str).str.lower()
-has_activity_codes = colC.str.contains(r"\\b0[1-7]\\b").any()
-
-# prova: anno/mese (col A,B)
+# ---- segnali "sum_of"
+# A=Anno plausibile, B=Mese plausibile, C contiene codici attivita 01..07
 colA = safe_col(0)
 colB = safe_col(1)
+colC = safe_col(2).astype(str).str.lower()
 
-# anno plausibile 4 cifre tra 2000 e 2100
+has_activity_codes = colC.str.contains(r"\\b0[1-7]\\b").any()
+
 try:
     a_num = pd.to_numeric(colA, errors="coerce")
     has_year = ((a_num >= 2000) & (a_num <= 2100)).any()
 except:
     has_year = False
 
-# mese plausibile 1-12 o stringhe con mesi
 b_str = colB.astype(str).str.lower()
-has_month = b_str.str.contains(r"\\b(1[0-2]|[1-9])\\b").any() or b_str.str.contains(
-    r"gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic"
-).any()
+has_month = (
+    b_str.str.contains(r"\\b(1[0-2]|[1-9])\\b").any()
+    or b_str.str.contains(r"gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic").any()
+)
 
-# prova: presenza colonne lunghe (Tabella fino a Z) e "tipo" in P (index 15) spesso testuale
+# ---- segnali "tabella"
+# P=Tipo (testuale), e presenza di valori numerici in blocco W..Z se ci sono abbastanza colonne
 idx_P = excel_col_letter_to_index("P")
 colP = safe_col(idx_P).astype(str).str.lower()
-has_tipo_like = colP.str.contains(r"amministr|condomin|ente|privat|azienda|cliente|tipo").any()
+has_tipo_like = colP.str.contains(r"amministr|condomin|ente|privat|azienda|tipo|cliente").any()
 
-# prova: presenza di valori € nelle ultime colonne (W..Z) spesso numerici
 idx_W = excel_col_letter_to_index("W")
 idx_Z = excel_col_letter_to_index("Z")
 has_money_like = False
 if ncols > idx_Z:
     block = df.iloc[:, idx_W:idx_Z+1]
-    # se almeno una cella è numerica > 0
     try:
         block_num = block.apply(pd.to_numeric, errors="coerce")
         has_money_like = (block_num.fillna(0) > 0).any().any()
     except:
         has_money_like = False
 
-# Classificazione
+# ---- scoring
 score_sum = 0
 score_tab = 0
 
@@ -116,7 +115,7 @@ elif score_sum > score_tab:
 else:
     kind = "unknown"
 
-(kind, ncols, score_tab, score_sum, colnames[:20])
+(kind, ncols, score_tab, score_sum)
 `;
 
 // -----------------------
@@ -176,7 +175,7 @@ def activity_priority(a):
 tab = pd.read_excel(io.BytesIO(bytes(TAB_BYTES)))
 su  = pd.read_excel(io.BytesIO(bytes(SUM_BYTES)))
 
-# Tabella Clienti: H I J P U V W X Y Z
+# Tabella: H I J P U V W X Y Z
 idx_H = excel_col_letter_to_index("H")
 idx_I = excel_col_letter_to_index("I")
 idx_J = excel_col_letter_to_index("J")
@@ -347,11 +346,10 @@ OUT_BYTES = out.read()
 `;
 
 // -----------------------
-// INIT
+// PYODIDE INIT
 // -----------------------
 async function init() {
   clearLog();
-  btnVerify.disabled = true; // hidden
   btnRun.disabled = true;
 
   try {
@@ -369,33 +367,19 @@ async function init() {
     await pyodide.loadPackage("micropip");
     log("micropip OK.");
 
-    log("Installo openpyxl e python-dateutil (puo' richiedere un po')...");
+    log("Installo openpyxl e python-dateutil...");
     await pyodide.runPythonAsync(`
 import micropip
 await micropip.install(["openpyxl","python-dateutil"])
 `);
-    log("Pacchetti OK.");
+    clearLog(); // da qui in avanti niente log "tecnico"
 
-    // Verifica immediata al cambio (anche se carichi solo 1 file)
-    const onChange = async (ev) => {
-      clearLog();
-      btnRun.disabled = true;
+    // Verifica automatica immediata su ogni file caricato
+    fileTab.addEventListener("change", () => onFileChanged("tabella"));
+    fileSum.addEventListener("change", () => onFileChanged("sum_of"));
 
-      if (ev && ev.target && ev.target.id === "fileTabella") {
-        await verifySingleFile("tabella");
-      } else if (ev && ev.target && ev.target.id === "fileSum") {
-        await verifySingleFile("sum_of");
-      }
-
-      // Se entrambi presenti, verifica completa e abilita output
-      if (bothSelected()) {
-        log("-----");
-        await verifyBothFiles();
-      }
-    };
-
-    fileTab.addEventListener("change", onChange);
-    fileSum.addEventListener("change", onChange);
+    // Click genera
+    btnRun.addEventListener("click", runReport);
 
   } catch (e) {
     clearLog();
@@ -404,89 +388,63 @@ await micropip.install(["openpyxl","python-dateutil"])
     console.error(e);
   }
 }
+
 init();
 
 // -----------------------
-// SINGLE FILE VERIFICATION (content-based)
+// CONTENT-BASED ANALYZE
 // -----------------------
-async function analyzeSingleFile(file) {
+async function analyzeFile(file) {
   const bytes = await readAsUint8Array(file);
   pyodide.globals.set("ONE_FILE_BYTES", bytes);
-  const res = await pyodide.runPythonAsync(PY_SINGLE_ANALYZE);
-  const [kind, ncols, scoreTab, scoreSum, colnames] = res.toJs();
-  return { kind, ncols, scoreTab, scoreSum, colnames };
+  const res = await pyodide.runPythonAsync(PY_ANALYZE);
+  const [kind, ncols, scoreTab, scoreSum] = res.toJs();
+  return { kind, ncols, scoreTab, scoreSum };
 }
 
-async function verifySingleFile(expectedKind) {
-  const file = (expectedKind === "tabella") ? fileTab.files[0] : fileSum.files[0];
+async function onFileChanged(slotExpectedKind) {
+  // slotExpectedKind: "tabella" per fileTab, "sum_of" per fileSum
+  btnRun.disabled = true;
+  clearLog();
+
+  const file = (slotExpectedKind === "tabella") ? fileTab.files[0] : fileSum.files[0];
   if (!file) return;
 
   try {
-    const info = await analyzeSingleFile(file);
+    const info = await analyzeFile(file);
 
-    const label = expectedKind === "tabella" ? "Tabella Clienti" : "Sum_of";
-    log(label + ": " + file.name);
-    log("Colonne = " + info.ncols);
+    // Regole minime per "contenuto"
+    // - tabella deve risultare kind=tabella (non unknown/sum_of) e avere abbastanza colonne
+    // - sum_of deve risultare kind=sum_of (non unknown/tabella) e avere abbastanza colonne
+    const minColsOk = (slotExpectedKind === "tabella") ? (info.ncols >= 26) : (info.ncols >= 8);
 
-    // check minimo per quello slot
-    const minOk = (expectedKind === "tabella") ? (info.ncols >= 26) : (info.ncols >= 8);
-    log("Check colonne (" + (expectedKind === "tabella" ? ">= 26 fino a Z" : ">= 8 fino a H") + "): " + (minOk ? "OK" : "NON OK"));
-
-    // riconoscimento contenuto
-    if (info.kind === "unknown") {
-      log("Riconoscimento contenuto: NON CHIARO (score Tabella=" + info.scoreTab + ", score Sum_of=" + info.scoreSum + ")");
-    } else {
-      log("Riconoscimento contenuto: sembra " + (info.kind === "tabella" ? "TABELLA" : "SUM_OF") + " (score Tabella=" + info.scoreTab + ", score Sum_of=" + info.scoreSum + ")");
-    }
-
-    // avviso se sembra scambiato
-    if (info.kind !== "unknown" && info.kind !== expectedKind) {
-      log("ATTENZIONE: questo file sembra l'altro (probabile scambio).");
-    }
-
-    // abilita output solo se entrambi e verifica completa ok (non qui)
-  } catch (e) {
-    log("ERRORE lettura file: " + String(e));
-    console.error(e);
-  }
-}
-
-// -----------------------
-// BOTH FILES VERIFICATION (strict)
-// -----------------------
-async function verifyBothFiles() {
-  try {
-    log("Verifica completa dei 2 file...");
-
-    // Analisi rapida su entrambi per intercettare scambi
-    const tabInfo = await analyzeSingleFile(fileTab.files[0]);
-    const sumInfo = await analyzeSingleFile(fileSum.files[0]);
-
-    // Se sembrano invertiti, blocca
-    if (tabInfo.kind === "sum_of" && sumInfo.kind === "tabella") {
-      log("ERRORE: hai invertito i file (Tabella <-> Sum_of).");
-      btnRun.disabled = true;
+    const kindOk = (info.kind === slotExpectedKind); // vogliamo match "forte": niente unknown
+    if (!minColsOk || !kindOk) {
+      alertFileErrato();
       return;
     }
 
-    // Check colonne minime nello slot corretto
-    const okTab = tabInfo.ncols >= 26;
-    const okSum = sumInfo.ncols >= 8;
+    // Se entrambi presenti: verifica incrociata (anche qui SOLO alert in caso errore)
+    if (bothSelected()) {
+      const tabInfo = await analyzeFile(fileTab.files[0]);
+      const sumInfo = await analyzeFile(fileSum.files[0]);
 
-    log("Tabella Clienti: colonne = " + tabInfo.ncols + " (serve >= 26 fino a Z) -> " + (okTab ? "OK" : "NON OK"));
-    log("Sum_of: colonne = " + sumInfo.ncols + " (serve >= 8 fino a H) -> " + (okSum ? "OK" : "NON OK"));
+      const okTab = (tabInfo.kind === "tabella" && tabInfo.ncols >= 26);
+      const okSum = (sumInfo.kind === "sum_of" && sumInfo.ncols >= 8);
 
-    if (okTab && okSum) {
-      log("OK. Puoi generare l'output.");
+      if (!okTab || !okSum) {
+        alertFileErrato();
+        btnRun.disabled = true;
+        return;
+      }
+
+      // tutto ok -> abilita output (silenzioso)
       btnRun.disabled = false;
-    } else {
-      log("ERRORE: file non corretti. Ricontrolla Tabella Clienti e Sum_of.");
-      btnRun.disabled = true;
     }
+
   } catch (e) {
-    log("ERRORE verifica completa: " + String(e));
     console.error(e);
-    btnRun.disabled = true;
+    alertFileErrato();
   }
 }
 
@@ -498,8 +456,6 @@ async function runReport() {
   btnRun.disabled = true;
 
   try {
-    log("Genero output...");
-
     const tabBytes = await readAsUint8Array(fileTab.files[0]);
     const sumBytes = await readAsUint8Array(fileSum.files[0]);
 
@@ -518,14 +474,10 @@ async function runReport() {
     });
     saveAs(blob, "Report_Tipo_Clienti.xlsx");
 
-    log("Output creato e scaricato: Report_Tipo_Clienti.xlsx");
   } catch (e) {
-    log("ERRORE generazione output: " + String(e));
     console.error(e);
+    alert("Errore generazione file");
   } finally {
     btnRun.disabled = false;
   }
 }
-
-// Bind click (il bottone esiste sempre)
-btnRun.addEventListener("click", runReport);

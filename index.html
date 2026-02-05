@@ -4,6 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Report Clienti (app1.0)</title>
+
+  <!-- Favicon in root -->
+  <link rel="icon" href="favicon.ico" type="image/x-icon" />
+
   <link rel="stylesheet" href="style.css" />
 
   <!-- Pyodide -->
@@ -13,30 +17,65 @@
 
   <script defer src="app.js"></script>
 </head>
+
 <body>
-  <div class="wrap">
-    <h1>Report Clienti – Upload &amp; Genera Excel</h1>
-
-    <div class="card">
-      <label>1) Tabella Clienti (.xlsx)</label>
-      <input id="fileTabella" type="file" accept=".xlsx" />
-
-      <label>2) Sum_of (.xlsx)</label>
-      <input id="fileSum" type="file" accept=".xlsx" />
-
-      <div class="row">
-        <button id="btnRun" disabled>Genera Report</button>
+  <div class="layout">
+    <!-- SIDEBAR MINIMA -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brandLogo">A</div>
+        <div class="brandText">
+          <div class="brandName">Report Clienti</div>
+          <div class="brandSub">Upload &amp; Genera Excel</div>
+        </div>
       </div>
+    </aside>
 
-      <pre id="log"></pre>
-    </div>
+    <!-- MAIN -->
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="pageTitle">Cruscotto</div>
+          <div class="pageSubtitle">Carica i file e genera il report</div>
+        </div>
+      </header>
 
-    <p class="note">
-      I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
-    </p>
+      <section class="content">
+        <section class="panel span-12">
+          <div class="panelHead teal">
+            <div class="panelTitle">Generatore Report</div>
+            <div class="panelMeta">app1.0</div>
+          </div>
+
+          <div class="panelBody">
+            <div class="formGrid">
+              <div class="field">
+                <label>1) Tabella Clienti (.xlsx)</label>
+                <input id="fileTabella" type="file" accept=".xlsx" />
+              </div>
+
+              <div class="field">
+                <label>2) Sum_of (.xlsx)</label>
+                <input id="fileSum" type="file" accept=".xlsx" />
+              </div>
+
+              <div class="actions">
+                <button id="btnRun" class="primaryBtn" disabled>Genera report</button>
+              </div>
+            </div>
+
+            <pre id="log" class="log"></pre>
+
+            <div class="note">
+              I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
   </div>
 
-  <!-- Modal errore -->
+  <!-- MODAL ERRORE -->
   <div id="errModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errTitle">
     <div class="modalBox">
       <div id="errTitle" class="modalTitle">File errato</div>

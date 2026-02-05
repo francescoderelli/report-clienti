@@ -1,74 +1,94 @@
+// app.js (v1.2) - GitHub Pages + Pyodide
+
 let pyodide = null;
+
 const logEl = document.getElementById("log");
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
 const btnVerify = document.getElementById("btnVerify");
 const btnRun = document.getElementById("btnRun");
 
-function log(msg){ logEl.textContent += msg + "\n"; logEl.scrollTop = logEl.scrollHeight; }
-function clearLog(){ logEl.textContent = ""; }
+function log(msg) {
+  logEl.textContent += msg + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function clearLog() { logEl.textContent = ""; }
 
-function bothSelected(){
+function bothSelected() {
   return fileTab.files.length === 1 && fileSum.files.length === 1;
 }
 
-async function init(){
-  clearLog();
-  log("Carico Pyodide...");
-  pyodide = await loadPyodide();
-  log("Pyodide pronto.");
-
-  // Pacchetti: pandas + openpyxl + python-dateutil
-  log("Installo pacchetti Python (pandas, openpyxl, python-dateutil)...");
-
-// 1) pandas
-log("Scarico pandas...");
-await pyodide.loadPackage(["pandas"]);
-log("pandas OK.");
-
-// 2) micropip (QUESTO è il fix)
-log("Carico micropip...");
-await pyodide.loadPackage("micropip");
-log("micropip OK.");
-
-// 3) openpyxl + python-dateutil
-log("Installo openpyxl e python-dateutil...");
-await pyodide.runPythonAsync(`
-import micropip
-await micropip.install(["openpyxl","python-dateutil"])
-`);
-log("Pacchetti OK.");
-
-
-  // abilita bottoni quando entrambi i file sono scelti
-  const onChange = () => {
-    btnVerify.disabled = !bothSelected();
-    btnRun.disabled = true;
-  };
-  fileTab.addEventListener("change", onChange);
-  fileSum.addEventListener("change", onChange);
-
-  btnVerify.addEventListener("click", verifyFiles);
-  btnRun.addEventListener("click", runReport);
-}
-init();
-
-async function readAsUint8Array(file){
+async function readAsUint8Array(file) {
   const buf = await file.arrayBuffer();
   return new Uint8Array(buf);
 }
 
-async function verifyFiles(){
+// -----------------------
+// INIT
+// -----------------------
+async function init() {
   clearLog();
-  log("Verifica file...");
+  btnVerify.disabled = true;
+  btnRun.disabled = true;
 
-  const tabBytes = await readAsUint8Array(fileTab.files[0]);
-  const sumBytes = await readAsUint8Array(fileSum.files[0]);
+  try {
+    log("Carico Pyodide...");
+    pyodide = await loadPyodide();
+    log("Pyodide pronto.");
 
-  pyodide.globals.set("TAB_BYTES", tabBytes);
-  pyodide.globals.set("SUM_BYTES", sumBytes);
+    log("Scarico pandas...");
+    await pyodide.loadPackage(["pandas"]);
+    log("pandas OK.");
 
-  const res = await pyodide.runPythonAsync(`
+    log("Carico micropip...");
+    await pyodide.loadPackage("micropip"); // <-- FIX fondamentale
+    log("micropip OK.");
+
+    log("Installo openpyxl e python-dateutil (può richiedere un po')...");
+    await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(["openpyxl","python-dateutil"])
+`);
+    log("Pacchetti OK.");
+
+    // abilita bottoni quando entrambi i file sono scelti
+    const onChange = () => {
+      btnVerify.disabled = !bothSelected();
+      btnRun.disabled = true;
+    };
+    fileTab.addEventListener("change", onChange);
+    fileSum.addEventListener("change", onChange);
+
+    btnVerify.addEventListener("click", verifyFiles);
+    btnRun.addEventListener("click", runReport);
+
+    log("Seleziona i 2 file e clicca 'Verifica file'.");
+  } catch (e) {
+    log("ERRORE init:");
+    log(String(e));
+    console.error(e);
+  }
+}
+
+init();
+
+// -----------------------
+// VERIFY
+// -----------------------
+async function verifyFiles() {
+  clearLog();
+  btnRun.disabled = true;
+
+  try {
+    log("Verifica file...");
+
+    const tabBytes = await readAsUint8Array(fileTab.files[0]);
+    const sumBytes = await readAsUint8Array(fileSum.files[0]);
+
+    pyodide.globals.set("TAB_BYTES", tabBytes);
+    pyodide.globals.set("SUM_BYTES", sumBytes);
+
+    const res = await pyodide.runPythonAsync(`
 import io
 import pandas as pd
 
@@ -79,38 +99,47 @@ def col_count(xlsx_bytes):
 tab_cols = col_count(bytes(TAB_BYTES))
 sum_cols = col_count(bytes(SUM_BYTES))
 
-# Tabella deve arrivare almeno alla Z (26 colonne)
-# Sum_of deve arrivare almeno alla H (8 colonne)
-ok_tab = tab_cols >= 26
-ok_sum = sum_cols >= 8
+ok_tab = tab_cols >= 26   # fino a Z
+ok_sum = sum_cols >= 8    # fino a H
 
 (tab_cols, sum_cols, ok_tab, ok_sum)
 `);
-  const [tabCols, sumCols, okTab, okSum] = res.toJs();
+    const [tabCols, sumCols, okTab, okSum] = res.toJs();
 
-  log(`Tabella Clienti: colonne = ${tabCols} (serve >= 26 fino a Z) -> ${okTab ? "OK" : "NON OK"}`);
-  log(`Sum_of: colonne = ${sumCols} (serve >= 8 fino a H) -> ${okSum ? "OK" : "NON OK"}`);
+    log(\`Tabella Clienti: colonne = \${tabCols} (serve >= 26 fino a Z) -> \${okTab ? "OK" : "NON OK"}\`);
+    log(\`Sum_of: colonne = \${sumCols} (serve >= 8 fino a H) -> \${okSum ? "OK" : "NON OK"}\`);
 
-  if(okTab && okSum){
-    log("Verifica superata. Puoi generare l’output.");
-    btnRun.disabled = false;
-  }else{
-    log("Verifica fallita: controlla che siano i file corretti.");
-    btnRun.disabled = true;
+    if (okTab && okSum) {
+      log("Verifica superata. Puoi generare l’output.");
+      btnRun.disabled = false;
+    } else {
+      log("Verifica fallita: carica i file corretti.");
+      btnRun.disabled = true;
+    }
+  } catch (e) {
+    log("ERRORE verifica:");
+    log(String(e));
+    console.error(e);
   }
 }
 
-async function runReport(){
+// -----------------------
+// RUN REPORT (v1.2)
+// -----------------------
+async function runReport() {
   clearLog();
-  log("Genero output (v1.2)...");
+  btnRun.disabled = true;
 
-  const tabBytes = await readAsUint8Array(fileTab.files[0]);
-  const sumBytes = await readAsUint8Array(fileSum.files[0]);
+  try {
+    log("Genero output (v1.2)...");
 
-  pyodide.globals.set("TAB_BYTES", tabBytes);
-  pyodide.globals.set("SUM_BYTES", sumBytes);
+    const tabBytes = await readAsUint8Array(fileTab.files[0]);
+    const sumBytes = await readAsUint8Array(fileSum.files[0]);
 
-  await pyodide.runPythonAsync(`
+    pyodide.globals.set("TAB_BYTES", tabBytes);
+    pyodide.globals.set("SUM_BYTES", sumBytes);
+
+    await pyodide.runPythonAsync(`
 import io, re
 import numpy as np
 import pandas as pd
@@ -137,7 +166,8 @@ def month_to_int(x):
     try:
         v = int(float(s))
         if 1 <= v <= 12: return v
-    except: pass
+    except:
+        pass
     m = re.search(r"\\b(\\d{1,2})\\b", s)
     if m:
         v = int(m.group(1))
@@ -205,6 +235,7 @@ sumdf = pd.DataFrame({
     "ID_Soggetto": su.iloc[:, idx_G].astype(str).str.strip(),
     "Nome_Soggetto_Sum": su.iloc[:, idx_Hs],
 })
+
 sumdf["Anno"] = pd.to_numeric(sumdf["Anno"], errors="coerce").astype("Int64")
 sumdf["Mese_num"] = sumdf["Mese"].apply(month_to_int).astype("Int64")
 sumdf["Prio"] = sumdf["Attivita"].apply(activity_priority).astype(int)
@@ -219,125 +250,4 @@ best_last = (best_in_month.sort_values(["ID_Soggetto","Periodo","Prio","_row"])
                         .groupby("ID_Soggetto", as_index=False)
                         .tail(1))
 
-last_act = best_last[["ID_Soggetto","Anno","Mese_num","Attivita","Chi"]].copy()
-last_act.rename(columns={
-    "Anno":"Anno_Ultima_Attivita",
-    "Mese_num":"Mese_Ultima_Attivita",
-    "Attivita":"Ultima_Attivita",
-    "Chi":"Ultima_Attivita_Fatta_Da"
-}, inplace=True)
-
-name_map = (sumdf[["ID_Soggetto","Nome_Soggetto_Sum"]]
-            .dropna(subset=["Nome_Soggetto_Sum"])
-            .drop_duplicates(subset=["ID_Soggetto"], keep="last"))
-
-corrispondenza = (clients[["ID_Soggetto","Cliente_Tabella"]]
-                  .merge(name_map, on="ID_Soggetto", how="left")
-                  .sort_values("ID_Soggetto"))
-
-final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
-final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
-
-output_cols = ["Cliente","Referente_Commerciale","Condomini_in_Albert","Condomini_Amministrati",
-               "Anno_Ultima_Attivita","Mese_Ultima_Attivita","Ultima_Attivita","Ultima_Attivita_Fatta_Da",
-               "PREVENTIVATO_EUR","DELIBERATO_EUR","FATTURATO_EUR","INCASSATO_EUR"]
-
-header_overrides = {
-    "PREVENTIVATO_EUR":"Preventivato €",
-    "DELIBERATO_EUR":"Deliberato €",
-    "FATTURATO_EUR":"Fatturato €",
-    "INCASSATO_EUR":"Incassato €",
-}
-
-# --- Scrivi Excel in memoria con openpyxl
-out = io.BytesIO()
-with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    riepilogo = (final.assign(Tipo=final["Tipo"].fillna("Senza_Tipo"))
-                      .groupby("Tipo", dropna=False).size()
-                      .reset_index(name="N_clienti")
-                      .sort_values("N_clienti", ascending=False))
-    riepilogo.to_excel(writer, sheet_name="Riepilogo", index=False)
-    corrispondenza.to_excel(writer, sheet_name="Corrispondenza", index=False)
-
-    used = {"Riepilogo","Corrispondenza"}
-    for tipo, df_t in final.groupby(final["Tipo"].fillna("Senza_Tipo"), dropna=False):
-        sheet = sanitize_sheet_name(tipo)
-        base = sheet
-        k = 1
-        while sheet in used:
-            k += 1
-            suf = f"_{k}"
-            sheet = (base[:31-len(suf)] + suf)[:31]
-        used.add(sheet)
-        df_t.copy()[output_cols].to_excel(writer, sheet_name=sheet, index=False)
-
-    wb = writer.book
-
-    # Formato € e header I-L su fogli tipo
-    euro_format = u'€ #,##0.00'
-    euro_cols = [9,10,11,12]
-    type_sheets = [s for s in wb.sheetnames if s not in ("Riepilogo","Corrispondenza")]
-    for sname in type_sheets:
-        ws = wb[sname]
-        for col_idx in euro_cols:
-            cur = ws.cell(row=1, column=col_idx).value
-            if cur in header_overrides:
-                ws.cell(row=1, column=col_idx).value = header_overrides[cur]
-        for r in range(2, ws.max_row+1):
-            for c in euro_cols:
-                cell = ws.cell(row=r, column=c)
-                cell.number_format = euro_format
-
-    # Foglio amministratore: match robusto + colori
-    GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
-    RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
-    cutoff = date.today() - relativedelta(months=2)
-    cutoff_period = cutoff.year*100 + cutoff.month
-
-    admin_sheet = None
-    for s in wb.sheetnames:
-        if s not in ("Riepilogo","Corrispondenza") and "amministr" in s.lower():
-            admin_sheet = s
-            break
-
-    if admin_sheet:
-        ws = wb[admin_sheet]
-        header = [c.value for c in ws[1]]
-        col_anno = header.index("Anno_Ultima_Attivita")+1
-        col_mese = header.index("Mese_Ultima_Attivita")+1
-        max_col = ws.max_column
-        for r in range(2, ws.max_row+1):
-            anno = ws.cell(r, col_anno).value
-            mese = ws.cell(r, col_mese).value
-            if anno is None or mese is None or str(anno).strip()=="" or str(mese).strip()=="":
-                fill = RED
-            else:
-                try:
-                    period = int(anno)*100 + int(mese)
-                    fill = RED if period < cutoff_period else GREEN
-                except:
-                    fill = RED
-            for c in range(1, max_col+1):
-                ws.cell(r,c).fill = fill
-        wb.active = wb.sheetnames.index(admin_sheet)
-
-    # Auto-width
-    for ws in wb.worksheets:
-        for col_idx, col_cells in enumerate(ws.columns, start=1):
-            max_len = 0
-            for cell in list(col_cells)[:2000]:
-                if cell.value is None: 
-                    continue
-                max_len = max(max_len, len(str(cell.value)))
-            ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len+2, 45)
-
-out.seek(0)
-OUT_BYTES = out.read()
-`);
-
-  const outBytes = pyodide.globals.get("OUT_BYTES");
-  const blob = new Blob([outBytes], {type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-  saveAs(blob, "Report_Tipo_Clienti.xlsx");
-  log("Output creato e scaricato: Report_Tipo_Clienti.xlsx");
-  btnRun.disabled = false;
-}
+last_act = best_last[["ID]()]()

@@ -35,13 +35,13 @@
     <main class="main">
       <header class="topbar">
         <div>
-          <div class="pageTitle">Report Clienti</div>
+          <div class="pageTitle">Cruscotto</div>
           <div class="pageSubtitle">Carica i file e genera il report</div>
         </div>
       </header>
 
       <section class="content">
-        <section class="panel span-12">
+        <section class="panel">
           <div class="panelHead teal">
             <div class="panelTitle">Generatore Report</div>
                       </div>
@@ -74,10 +74,12 @@
     </main>
   </div>
 
-  <!-- MODAL ERRORE -->
+  <!-- MODAL (OK / ERRORE) -->
   <div id="errModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errTitle">
-    <div class="modalBox">
+    <div class="modalBox err">
+      <div class="modalIcon"></div>
       <div id="errTitle" class="modalTitle">File errato</div>
+      <div id="errText" class="modalText">Carica il file corretto e riprova.</div>
       <button id="errOk" class="modalBtn">OK</button>
     </div>
   </div>

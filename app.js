@@ -1,12 +1,10 @@
 /* ============================================
    app.js - Report Clienti
-   MODIFICHE:
-   - Verifica singolo file con modal OK immediato
-   - Niente log visibile
-   - Niente pill/status in alto a destra
-   - stdout/stderr Pyodide silenziati
-   - Lettura robusta header anche se non in prima riga
-   - Compatibile con nuovi export Excel Albert
+   FIX robusto:
+   - verifica singolo file
+   - abilita bottone appena entrambi sono OK
+   - legge header non in prima riga
+   - niente log visibili / niente pill
 ============================================ */
 
 let pyodide = null;
@@ -20,7 +18,6 @@ const errOk    = document.getElementById("errOk");
 const okModal  = document.getElementById("okModal");
 const okOk     = document.getElementById("okOk");
 const okText   = document.getElementById("okText");
-
 const overlay  = document.getElementById("loadingOverlay");
 
 const state = {
@@ -43,6 +40,7 @@ function hideModal(modal){
 }
 
 function updateRunEnabled(){
+  if (!btnRun) return;
   btnRun.disabled = !(state.tabOk && state.sumOk);
 }
 
@@ -52,15 +50,15 @@ async function readAsUint8Array(file){
 }
 
 async function init(){
-  btnRun.disabled = true;
+  updateRunEnabled();
   showOverlay();
 
   if (errOk) errOk.addEventListener("click", () => hideModal(errModal));
-  if (okOk)  okOk.addEventListener("click",  () => hideModal(okModal));
+  if (okOk) okOk.addEventListener("click", () => hideModal(okModal));
 
-  fileTab.addEventListener("change", () => onFileSelected("tab"));
-  fileSum.addEventListener("change", () => onFileSelected("sum"));
-  btnRun.addEventListener("click", runReport);
+  if (fileTab) fileTab.addEventListener("change", () => onFileSelected("tab"));
+  if (fileSum) fileSum.addEventListener("change", () => onFileSelected("sum"));
+  if (btnRun) btnRun.addEventListener("click", runReport);
 
   pyodide = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
@@ -93,17 +91,24 @@ init().catch(e => {
 async function onFileSelected(kind){
   if (!pyodide) return;
 
-  if (kind === "tab") { state.tabOk = false; state.tabBytes = null; }
-  else { state.sumOk = false; state.sumBytes = null; }
+  const input = kind === "tab" ? fileTab : fileSum;
+  if (!input || !input.files || input.files.length !== 1) return;
+
+  if (kind === "tab") {
+    state.tabOk = false;
+    state.tabBytes = null;
+  } else {
+    state.sumOk = false;
+    state.sumBytes = null;
+  }
   updateRunEnabled();
 
-  const input = (kind === "tab") ? fileTab : fileSum;
-  if (!input.files || input.files.length !== 1) return;
+  try {
+    const bytes = await readAsUint8Array(input.files[0]);
+    pyodide.globals.set("FILE_BYTES", bytes);
+    pyodide.globals.set("EXPECTED_KIND", kind === "tab" ? "tabella" : "sumof");
 
-  const bytes = await readAsUint8Array(input.files[0]);
-  pyodide.globals.set("FILE_BYTES", bytes);
-
-  const res = await pyodide.runPythonAsync(`
+    const res = await pyodide.runPythonAsync(`
 import io
 import pandas as pd
 
@@ -122,91 +127,122 @@ def score(cols):
     sum_s = 0
 
     for m in tab_must:
-        if m in cset: tab_s += 3
+        if m in cset:
+            tab_s += 3
     for b in tab_bonus:
-        if any(b in c for c in cols): tab_s += 1
+        if any(b in c for c in cols):
+            tab_s += 1
 
     for m in sum_must:
-        if m in cset: sum_s += 3
+        if m in cset:
+            sum_s += 3
     for b in sum_bonus:
-        if any(b in c for c in cols): sum_s += 1
+        if any(b in c for c in cols):
+            sum_s += 1
 
     return tab_s, sum_s
 
 def classify(tab_s, sum_s):
-    if tab_s >= 6 and tab_s > sum_s + 1: return "tabella"
-    if sum_s >= 6 and sum_s > tab_s + 1: return "sumof"
+    if tab_s >= 6 and tab_s > sum_s + 1:
+        return "tabella"
+    if sum_s >= 6 and sum_s > tab_s + 1:
+        return "sumof"
     return "unknown"
 
 xlsx = bytes(FILE_BYTES)
+expected = str(EXPECTED_KIND)
 
 best_kind = "unknown"
 best_score = -1
 
+# tentativo 1: header standard
 try:
     df1 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0)
     cols1 = norm_cols(df1.columns)
     t1, s1 = score(cols1)
-    sc1 = t1 + s1
     k1 = classify(t1, s1)
+    sc1 = max(t1, s1)
     if sc1 > best_score:
         best_score = sc1
         best_kind = k1
-except Exception:
+except:
     pass
 
-df0 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0, header=None)
+# tentativo 2: cerca riga header reale
+try:
+    df0 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0, header=None)
+    for i in range(min(80, len(df0))):
+        row = df0.iloc[i].astype(str).str.upper().str.strip().tolist()
 
-header_row = None
-for i in range(min(80, len(df0))):
-    row = df0.iloc[i].astype(str).str.upper().str.strip().tolist()
-    if "ID_SOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row):
-        header_row = i
-        break
-    if "ANNO" in row and "MESE" in row and "CODICESOGGETTO" in row:
-        header_row = i
-        break
+        is_tab = ("ID_SOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row))
+        is_sum = ("ANNO" in row and "MESE" in row and "CODICESOGGETTO" in row)
 
-if header_row is not None:
-    df2 = df0.copy()
-    df2.columns = df2.iloc[header_row].astype(str)
-    df2 = df2.iloc[header_row+1:].reset_index(drop=True)
-    cols2 = norm_cols(df2.columns)
-    t2, s2 = score(cols2)
-    sc2 = t2 + s2
-    k2 = classify(t2, s2)
-    if sc2 > best_score:
-        best_score = sc2
-        best_kind = k2
+        if is_tab or is_sum:
+            df2 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0, header=i)
+            cols2 = norm_cols(df2.columns)
+            t2, s2 = score(cols2)
+            k2 = classify(t2, s2)
+            sc2 = max(t2, s2)
+            if sc2 > best_score:
+                best_score = sc2
+                best_kind = k2
+            break
+except:
+    pass
 
 best_kind
 `);
 
-  const kindFound = res.toJs();
+    const kindFound = typeof res === "string" ? res : res.toJs();
 
-  let ok = false;
-  if (kind === "tab") ok = (kindFound === "tabella");
-  if (kind === "sum") ok = (kindFound === "sumof");
+    let ok = false;
+    if (kind === "tab") ok = (kindFound === "tabella");
+    if (kind === "sum") ok = (kindFound === "sumof");
 
-  if (!ok){
-    if (kind === "tab") { fileTab.value = ""; state.tabOk = false; state.tabBytes = null; }
-    else { fileSum.value = ""; state.sumOk = false; state.sumBytes = null; }
+    if (!ok){
+      if (kind === "tab") {
+        fileTab.value = "";
+        state.tabOk = false;
+        state.tabBytes = null;
+      } else {
+        fileSum.value = "";
+        state.sumOk = false;
+        state.sumBytes = null;
+      }
+      updateRunEnabled();
+      showModal(errModal);
+      return;
+    }
+
+    if (kind === "tab") {
+      state.tabOk = true;
+      state.tabBytes = bytes;
+    } else {
+      state.sumOk = true;
+      state.sumBytes = bytes;
+    }
+
+    updateRunEnabled();
+
+    if (okText) {
+      okText.textContent = kind === "tab"
+        ? "Tabella Clienti verificata."
+        : "Sum_of verificato.";
+    }
+    showModal(okModal);
+
+  } catch (e) {
+    console.error(e);
+    if (kind === "tab") {
+      state.tabOk = false;
+      state.tabBytes = null;
+    } else {
+      state.sumOk = false;
+      state.sumBytes = null;
+    }
     updateRunEnabled();
     showModal(errModal);
-    return;
   }
-
-  if (kind === "tab") { state.tabOk = true; state.tabBytes = bytes; }
-  else { state.sumOk = true; state.sumBytes = bytes; }
-
-  updateRunEnabled();
-
-  if (okText){
-    okText.textContent = (kind === "tab")
-      ? "Tabella Clienti verificata."
-      : "Sum_of verificato.";
-  }
-  showModal(okModal);
 }
 
 async function runReport(){
@@ -291,8 +327,7 @@ def read_excel_robust(xlsx_bytes, expected_type):
         pass
 
     header_row = find_header_row(xlsx_bytes, expected_type)
-    df = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=header_row)
-    return df
+    return pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=header_row)
 
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
@@ -313,7 +348,6 @@ def pick_col(df, keys, fallback_idx=None):
         return df.columns[fallback_idx]
     return None
 
-# Tabella Clienti
 c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
 c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
 c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
@@ -339,10 +373,9 @@ clients = pd.DataFrame({
     "INCASSATO_EUR": tab[c_inc] if c_inc else np.nan,
 })
 
-# Sum_of
 s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
 s_mese = pick_col(su, ["MESE"], fallback_idx=1)
-s_att  = pick_col(su, ["CLASSE ATTIVITÀ","CLASSE ATTIVITA","ATTIVITA","ATTIVITÀ","CLASSE ATTIVITÁ"], fallback_idx=2)
+s_att  = pick_col(su, ["CLASSE ATTIVITÀ","CLASSE ATTIVITA","ATTIVITA","ATTIVITÀ"], fallback_idx=2)
 s_chi  = pick_col(su, ["RESPONSABILE","CHI"], fallback_idx=4)
 s_cod  = pick_col(su, ["CODICESOGGETTO","CODICE SOGGETTO"], fallback_idx=6)
 s_nome = pick_col(su, ["NOMESOGGETTO","NOME SOGGETTO"], fallback_idx=7)

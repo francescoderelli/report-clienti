@@ -346,48 +346,6 @@ def activity_priority(a):
         return priority_map.get(m2.group(1), 0)
     return 0
 
-def extract_stage_code(a):
-    if pd.isna(a):
-        return ""
-    s = str(a).strip()
-    m = re.match(r"^\\s*(\\d{2})", s)
-    if m:
-        return m.group(1)
-    m2 = re.search(r"\\b(0[1-7])\\b", s)
-    if m2:
-        return m2.group(1)
-    return ""
-
-stage_name_map = {
-    "01": "Telefonata",
-    "02": "Appuntamento",
-    "03": "Incontro",
-    "04": "Richiesta",
-    "05": "Sopralluogo",
-    "06": "Preventivo",
-    "07": "Delibera",
-}
-
-stage_order_map = {
-    "01": 1,
-    "02": 2,
-    "03": 3,
-    "04": 4,
-    "05": 5,
-    "06": 6,
-    "07": 7,
-}
-
-stage_threshold_map = {
-    "01": 1,
-    "02": 1,
-    "03": 1,
-    "04": 1,
-    "05": 1,
-    "06": 2,
-    "07": 999
-}
-
 def period_to_year_month(period):
     period = int(period)
     anno = period // 100
@@ -507,9 +465,6 @@ sumdf["Prio"] = sumdf["Attivita"].apply(activity_priority).astype(int)
 sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
-sumdf["Stage_Code"] = sumdf["Attivita"].apply(extract_stage_code)
-sumdf["Stage_Order"] = sumdf["Stage_Code"].map(stage_order_map).fillna(0).astype(int)
-sumdf["Stage_Name"] = sumdf["Stage_Code"].map(stage_name_map).fillna(sumdf["Attivita"])
 
 # =========================================================
 # ULTIMA ATTIVITA'
@@ -551,18 +506,77 @@ final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
 # =========================================================
-# AVANZAMENTO CLIENTI
+# AVANZAMENTO CLIENTI - VERSIONE ROBUSTA
 # =========================================================
+
+def stage_label_from_code(code):
+    mapping = {
+        "01": "Telefonata",
+        "02": "Appuntamento",
+        "03": "Incontro",
+        "04": "Richiesta",
+        "05": "Sopralluogo",
+        "06": "Preventivo",
+        "07": "Delibera",
+    }
+    return mapping.get(code, code)
+
+def extract_stage_code_safe(a):
+    if pd.isna(a):
+        return ""
+    s = str(a).strip().upper()
+    m = re.match(r"^\\s*(\\d{2})", s)
+    if m:
+        return m.group(1)
+    m2 = re.search(r"\\b(0[1-7])\\b", s)
+    if m2:
+        return m2.group(1)
+    return ""
 
 today_period = date.today().year * 100 + date.today().month
 
-adv_base = sumdf[sumdf["Stage_Order"] > 0].copy()
-adv_base = adv_base.sort_values(["ID_Soggetto", "Periodo", "Stage_Order", "_row"]).copy()
+adv_base = sumdf.copy()
+adv_base["Stage_Code2"] = adv_base["Attivita"].apply(extract_stage_code_safe)
+adv_base["Stage_Order2"] = adv_base["Stage_Code2"].map({
+    "01": 1,
+    "02": 2,
+    "03": 3,
+    "04": 4,
+    "05": 5,
+    "06": 6,
+    "07": 7,
+}).fillna(0).astype(int)
+
+# fallback: se non trova Stage_Order2 usa Prio, che già funziona nel report standard
+adv_base["Stage_Order_Final"] = np.where(
+    adv_base["Stage_Order2"] > 0,
+    adv_base["Stage_Order2"],
+    adv_base["Prio"]
+).astype(int)
+
+adv_base["Stage_Code_Final"] = adv_base["Stage_Code2"]
+
+prio_to_code = {
+    2: "01",
+    1: "02",
+    4: "03",
+    5: "04",
+    3: "05",
+    6: "06",
+    7: "07",
+}
+mask_missing_code = adv_base["Stage_Code_Final"].eq("") & adv_base["Stage_Order_Final"].gt(0)
+adv_base.loc[mask_missing_code, "Stage_Code_Final"] = adv_base.loc[mask_missing_code, "Prio"].map(prio_to_code).fillna("")
+
+adv_base["Stage_Name_Final"] = adv_base["Stage_Code_Final"].apply(stage_label_from_code)
+
+adv_base = adv_base[adv_base["Stage_Order_Final"] > 0].copy()
+adv_base = adv_base.sort_values(["ID_Soggetto", "Periodo", "Stage_Order_Final", "_row"]).copy()
 
 records = []
 
 for client_id, g in adv_base.groupby("ID_Soggetto"):
-    g = g.sort_values(["Periodo", "Stage_Order", "_row"]).copy()
+    g = g.sort_values(["Periodo", "Stage_Order_Final", "_row"]).copy()
 
     max_stage_so_far = 0
     current_stage_code = ""
@@ -570,11 +584,12 @@ for client_id, g in adv_base.groupby("ID_Soggetto"):
     first_period_current_stage = None
 
     for _, row in g.iterrows():
-        row_stage = int(row["Stage_Order"])
-        row_code = row["Stage_Code"]
-        row_name = row["Stage_Name"]
+        row_stage = int(row["Stage_Order_Final"])
+        row_code = row["Stage_Code_Final"]
+        row_name = row["Stage_Name_Final"]
         row_period = int(row["Periodo"])
 
+        # avanzamento reale solo se supera il massimo raggiunto
         if row_stage > max_stage_so_far:
             max_stage_so_far = row_stage
             current_stage_code = row_code
@@ -584,17 +599,19 @@ for client_id, g in adv_base.groupby("ID_Soggetto"):
     if first_period_current_stage is None:
         continue
 
-    last_row = g.iloc[-1]
+    last_row = g.sort_values(["Periodo", "_row"]).iloc[-1]
     last_period_seen = int(last_row["Periodo"])
     last_actor = last_row["Chi"] if "Chi" in g.columns else np.nan
 
     mesi_fermo = months_diff(first_period_current_stage, today_period)
-    soglia = stage_threshold_map.get(current_stage_code, 1)
 
     if current_stage_code == "07":
         stato_avanzamento = "Deliberato"
         da_riassegnare = "No"
-    elif mesi_fermo >= soglia:
+    elif current_stage_code in ("01", "02", "03", "04", "05") and mesi_fermo >= 1:
+        stato_avanzamento = "Da riassegnare"
+        da_riassegnare = "Si"
+    elif current_stage_code == "06" and mesi_fermo >= 2:
         stato_avanzamento = "Da riassegnare"
         da_riassegnare = "Si"
     elif mesi_fermo == 0:
@@ -632,8 +649,8 @@ if adv_df.empty:
     avanzamento_clienti["Ultimo_Anno_Rilevato"] = np.nan
     avanzamento_clienti["Ultimo_Mese_Rilevato"] = np.nan
     avanzamento_clienti["Mesi_Fermo_Nello_Stadio"] = np.nan
-    avanzamento_clienti["Stato_Avanzamento"] = np.nan
-    avanzamento_clienti["Da_Riassegnare"] = np.nan
+    avanzamento_clienti["Stato_Avanzamento"] = "Nessuna attività"
+    avanzamento_clienti["Da_Riassegnare"] = "No"
     avanzamento_clienti["Ultima_Attivita_Fatta_Da"] = np.nan
 else:
     avanzamento_clienti = final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].merge(

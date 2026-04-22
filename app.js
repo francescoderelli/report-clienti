@@ -437,15 +437,40 @@ def mesi_senza_miglioramento(ranks):
             months += 1
     return months
 
-def da_riassegnare(last_rank, mesi_no_improve):
+def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, cur_val):
+    # Delibera mai da riassegnare
     if last_rank == 7:
         return "No"
-    if last_rank in (1, 2) and mesi_no_improve >= 2:
+
+    old_r = activity_to_rank(old_val)
+    m2_r  = activity_to_rank(m2_val)
+    m1_r  = activity_to_rank(m1_val)
+    cur_r = activity_to_rank(cur_val)
+
+    # Nessuna attività assoluta -> da riassegnare
+    if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
+        return "Si"
+
+    # Nessuna attività recente ma storico presente -> da riassegnare
+    if trend == "Nessuna attività":
+        return "Si"
+
+    # Arretra -> da riassegnare
+    if trend == "Arretra":
+        return "Si"
+
+    # Fermo -> più aggressivo
+    if trend == "Fermo":
+        return "Si"
+
+    # Regole per stadio
+    if last_rank in (1, 2) and mesi_no_improve >= 1:
         return "Si"
     if last_rank in (3, 4, 5) and mesi_no_improve >= 1:
         return "Si"
     if last_rank == 6 and mesi_no_improve >= 2:
         return "Si"
+
     return "No"
 
 def esito_manageriale(last_rank, trend, mesi_no_improve):

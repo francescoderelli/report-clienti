@@ -8,17 +8,13 @@
   <link rel="icon" href="favicon.ico" type="image/x-icon" />
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Pyodide -->
   <script defer src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
-  <!-- FileSaver -->
   <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
-
   <script defer src="app.js"></script>
 </head>
 
 <body>
-  <!-- Overlay caricamento -->
-  <div id="loadingOverlay" class="overlay">
+  <div id="loadingOverlay" class="overlay hidden">
     <div class="overlayBox">
       <div class="spinner"></div>
       <div class="overlayText">Caricamento in corso…</div>
@@ -26,7 +22,6 @@
   </div>
 
   <div class="layout">
-    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="brand">
         <div class="brandLogo">A</div>
@@ -44,7 +39,6 @@
       </div>
     </aside>
 
-    <!-- Main -->
     <main class="main">
       <header class="topbar">
         <div>
@@ -67,7 +61,7 @@
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt;
                   <b>Customers Summary / Riepilogo Clienti</b> &gt;
-                  seleziona la tua sede &gt; in fondo pagina scarica
+                  seleziona la sede &gt; scarica
                   <b>“Tabella Clienti (no filtro data)”</b>.
                 </div>
               </div>
@@ -78,9 +72,8 @@
                 <div class="hint">
                   Scaricalo da <b>Dashboard commerciale</b> &gt;
                   <b>By-Products / Sottoprodotti</b> &gt;
-                  seleziona la sede &gt; seleziona anno <b>2025</b> e <b>2026</b> &gt;
-                  in fondo pagina scarica il file dall’ultima tabella
-                  (sottoprodotti divisi per classe attività).
+                  seleziona sede &gt; seleziona anno <b>2025</b> e <b>2026</b> &gt;
+                  scarica il file dall’ultima tabella.
                 </div>
               </div>
 
@@ -94,17 +87,15 @@
     </main>
   </div>
 
-  <!-- MODAL ERRORE -->
   <div id="errModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errTitle">
     <div class="modalBox err">
       <div class="modalIcon"></div>
-      <div id="errTitle" class="modalTitle">File errato</div>
-      <div class="modalText">Carica il file corretto e riprova.</div>
+      <div id="errTitle" class="modalTitle">Errore</div>
+      <div class="modalText" id="errText">Carica il file corretto e riprova.</div>
       <button id="errOk" class="modalBtn errBtn" type="button">OK</button>
     </div>
   </div>
 
-  <!-- MODAL OK -->
   <div id="okModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="okTitle">
     <div class="modalBox ok">
       <div class="modalIcon"></div>

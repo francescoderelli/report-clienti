@@ -1,6 +1,12 @@
 /* ============================================
    app.js - Report Clienti
-   Versione focalizzata su AVANZAMENTO AMMINISTRATORI
+   Versione completa con:
+   - verifica singolo file
+   - lettura robusta header Excel
+   - report standard
+   - avanzamento SOLO amministratori
+   - sintesi avanzamento
+   - nessun log visibile
 ============================================ */
 
 let pyodide = null;
@@ -108,7 +114,6 @@ async function onFileSelected(kind) {
 
   try {
     const bytes = await readAsUint8Array(input.files[0]);
-
     pyodide.globals.set("FILE_BYTES", bytes);
 
     const res = await pyodide.runPythonAsync(`
@@ -120,7 +125,11 @@ def norm_cols(cols):
 
 def score(cols):
     tab_must = {"ID_SOGGETTO", "TIPO", "CLIENTE"}
-    tab_bonus = ["RESPONSABILE", "RESPONSABILEAREA", "CONDOMINI IN ALBERT", "CONDOMINI AMMINISTRATI", "PREVENTIVATO", "DELIBERATO", "FATTURATO", "INCASSATO"]
+    tab_bonus = [
+        "RESPONSABILE", "RESPONSABILEAREA",
+        "CONDOMINI IN ALBERT", "CONDOMINI AMMINISTRATI",
+        "PREVENTIVATO", "DELIBERATO", "FATTURATO", "INCASSATO"
+    ]
     sum_must = {"ANNO", "MESE", "CODICESOGGETTO", "NOMESOGGETTO"}
     sum_bonus = ["CLASSE ATTIV"]
 
@@ -152,6 +161,7 @@ def classify(tab_s, sum_s):
     return "unknown"
 
 xlsx = bytes(FILE_BYTES)
+
 best_kind = "unknown"
 best_score = -1
 
@@ -284,21 +294,32 @@ def month_to_int(x):
             return v
     except:
         pass
+
     m = re.search(r"\\b(\\d{1,2})\\b", s)
     if m:
         v = int(m.group(1))
         if 1 <= v <= 12:
             return v
+
     mesi = {
-        "gen":1, "gennaio":1, "feb":2, "febbraio":2, "mar":3, "marzo":3,
-        "apr":4, "aprile":4, "mag":5, "maggio":5, "giu":6, "giugno":6,
-        "lug":7, "luglio":7, "ago":8, "agosto":8, "set":9, "sett":9, "settembre":9,
-        "ott":10, "ottobre":10, "nov":11, "novembre":11, "dic":12, "dicembre":12
+        "gen":1, "gennaio":1,
+        "feb":2, "febbraio":2,
+        "mar":3, "marzo":3,
+        "apr":4, "aprile":4,
+        "mag":5, "maggio":5,
+        "giu":6, "giugno":6,
+        "lug":7, "luglio":7,
+        "ago":8, "agosto":8,
+        "set":9, "sett":9, "settembre":9,
+        "ott":10, "ottobre":10,
+        "nov":11, "novembre":11,
+        "dic":12, "dicembre":12
     }
     low = s.lower()
     for k, v in mesi.items():
         if k in low:
             return v
+
     return np.nan
 
 priority_map = {"07":7, "06":6, "04":5, "03":4, "05":3, "01":2, "02":1}
@@ -346,23 +367,28 @@ def read_excel_robust(xlsx_bytes, expected_type):
             return df
     except:
         pass
+
     header_row = find_header_row(xlsx_bytes, expected_type)
     return pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=header_row)
 
 def pick_col(df, keys, fallback_idx=None):
     cols = list(df.columns)
     upmap = {str(c).strip().upper(): c for c in cols}
+
     for k in keys:
         ku = k.upper()
         if ku in upmap:
             return upmap[ku]
+
     for c in cols:
         cu = str(c).upper()
         for k in keys:
             if k.upper() in cu:
                 return c
+
     if fallback_idx is not None and df.shape[1] > fallback_idx:
         return df.columns[fallback_idx]
+
     return None
 
 def stage_label_from_code(code):
@@ -389,10 +415,17 @@ def extract_stage_code_safe(a):
         return m2.group(1)
     return ""
 
+# =========================================================
+# LETTURA FILE
+# =========================================================
+
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
 
-# Tabella clienti
+# =========================================================
+# TAB CLIENTI
+# =========================================================
+
 c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
 c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
 c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
@@ -418,7 +451,10 @@ clients = pd.DataFrame({
     "INCASSATO_EUR": tab[c_inc] if c_inc else np.nan,
 })
 
-# Sum_of
+# =========================================================
+# SUM OF
+# =========================================================
+
 s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
 s_mese = pick_col(su, ["MESE"], fallback_idx=1)
 s_att  = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=2)
@@ -442,7 +478,10 @@ sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
 
-# Ultima attività standard
+# =========================================================
+# ULTIMA ATTIVITA'
+# =========================================================
+
 best_in_month = (
     sumdf.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
          .groupby(["ID_Soggetto", "Periodo"], as_index=False)
@@ -478,37 +517,50 @@ corrispondenza = (
 final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
+# =========================================================
 # SOLO AMMINISTRATORI
+# =========================================================
+
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
 
-# Avanzamento solo amministratori
+# =========================================================
+# AVANZAMENTO SOLO AMMINISTRATORI - FIX ROBUSTO
+# =========================================================
+
 today_period = date.today().year * 100 + date.today().month
 
+admins_base = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].copy()
+admins_base["ID_Soggetto"] = admins_base["ID_Soggetto"].astype(str).str.strip()
+
 adv_base = sumdf.copy()
-adv_base["Stage_Code2"] = adv_base["Attivita"].apply(extract_stage_code_safe)
-adv_base["Stage_Order2"] = adv_base["Stage_Code2"].map({
+adv_base["ID_Soggetto"] = adv_base["ID_Soggetto"].astype(str).str.strip()
+
+adv_base["Stage_Code"] = adv_base["Attivita"].apply(extract_stage_code_safe)
+adv_base["Stage_Order"] = adv_base["Stage_Code"].map({
     "01": 1, "02": 2, "03": 3, "04": 4, "05": 5, "06": 6, "07": 7
 }).fillna(0).astype(int)
 
 adv_base["Stage_Order_Final"] = np.where(
-    adv_base["Stage_Order2"] > 0,
-    adv_base["Stage_Order2"],
+    adv_base["Stage_Order"] > 0,
+    adv_base["Stage_Order"],
     adv_base["Prio"]
 ).astype(int)
 
-adv_base["Stage_Code_Final"] = adv_base["Stage_Code2"]
-
 prio_to_code = {2:"01", 1:"02", 4:"03", 5:"04", 3:"05", 6:"06", 7:"07"}
+adv_base["Stage_Code_Final"] = adv_base["Stage_Code"]
 mask_missing_code = adv_base["Stage_Code_Final"].eq("") & adv_base["Stage_Order_Final"].gt(0)
 adv_base.loc[mask_missing_code, "Stage_Code_Final"] = adv_base.loc[mask_missing_code, "Prio"].map(prio_to_code).fillna("")
-
 adv_base["Stage_Name_Final"] = adv_base["Stage_Code_Final"].apply(stage_label_from_code)
-adv_base = adv_base[adv_base["Stage_Order_Final"] > 0].copy()
 
-# tieni solo i soggetti presenti tra gli amministratori
-admin_ids = set(admins_final["ID_Soggetto"].dropna().astype(str))
-adv_base = adv_base[adv_base["ID_Soggetto"].astype(str).isin(admin_ids)].copy()
+# Fix vero: aggancio agli stessi amministratori del foglio Amministratore
+adv_base = adv_base.merge(
+    admins_base[["ID_Soggetto"]],
+    on="ID_Soggetto",
+    how="inner"
+)
+
+adv_base = adv_base[adv_base["Stage_Order_Final"] > 0].copy()
 adv_base = adv_base.sort_values(["ID_Soggetto", "Periodo", "Stage_Order_Final", "_row"]).copy()
 
 records = []
@@ -576,26 +628,14 @@ for client_id, g in adv_base.groupby("ID_Soggetto"):
 
 adv_df = pd.DataFrame(records)
 
-if adv_df.empty:
-    avanzamento_clienti = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].copy()
-    avanzamento_clienti["Codice_Stadio_Attuale"] = np.nan
-    avanzamento_clienti["Stadio_Attuale"] = np.nan
-    avanzamento_clienti["Primo_Anno_Stadio_Attuale"] = np.nan
-    avanzamento_clienti["Primo_Mese_Stadio_Attuale"] = np.nan
-    avanzamento_clienti["Ultimo_Anno_Rilevato"] = np.nan
-    avanzamento_clienti["Ultimo_Mese_Rilevato"] = np.nan
-    avanzamento_clienti["Mesi_Fermo_Nello_Stadio"] = np.nan
-    avanzamento_clienti["Stato_Avanzamento"] = "Nessuna attività"
-    avanzamento_clienti["Da_Riassegnare"] = "No"
-    avanzamento_clienti["Ultima_Attivita_Fatta_Da"] = np.nan
-else:
-    avanzamento_clienti = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].merge(
-        adv_df,
-        on="ID_Soggetto",
-        how="left"
-    )
-    avanzamento_clienti["Stato_Avanzamento"] = avanzamento_clienti["Stato_Avanzamento"].fillna("Nessuna attività")
-    avanzamento_clienti["Da_Riassegnare"] = avanzamento_clienti["Da_Riassegnare"].fillna("No")
+avanzamento_clienti = admins_base.merge(
+    adv_df,
+    on="ID_Soggetto",
+    how="left"
+)
+
+avanzamento_clienti["Stato_Avanzamento"] = avanzamento_clienti["Stato_Avanzamento"].fillna("Nessuna attività")
+avanzamento_clienti["Da_Riassegnare"] = avanzamento_clienti["Da_Riassegnare"].fillna("No")
 
 adv_cols = [
     "Cliente",
@@ -611,6 +651,10 @@ adv_cols = [
     "Da_Riassegnare",
     "Ultima_Attivita_Fatta_Da",
 ]
+
+for col in adv_cols:
+    if col not in avanzamento_clienti.columns:
+        avanzamento_clienti[col] = np.nan
 
 avanzamento_clienti = avanzamento_clienti[adv_cols].copy()
 
@@ -648,7 +692,10 @@ sintesi_stato = (
     .sort_values("N_Clienti", ascending=False)
 )
 
-# Output standard
+# =========================================================
+# OUTPUT STANDARD
+# =========================================================
+
 output_cols = [
     "Cliente",
     "Referente_Commerciale",
@@ -722,7 +769,6 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
     RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
 
-    # Colora Avanzamento_Clienti
     if "Avanzamento_Clienti" in wb.sheetnames:
         ws = wb["Avanzamento_Clienti"]
         header = [c.value for c in ws[1]]
@@ -742,7 +788,6 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         except:
             pass
 
-    # Foglio amministratore standard
     admin_sheet = None
     for s in wb.sheetnames:
         if s not in ("Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato") and "amministr" in s.lower():

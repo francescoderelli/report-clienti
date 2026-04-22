@@ -1,9 +1,11 @@
 /* ============================================
    app.js - Report Clienti
+   Versione completa con:
    - verifica singolo file
-   - errore reale mostrato in modal
+   - messaggio errore reale
    - report standard
    - avanzamento solo amministratori
+   - fogli DEBUG per capire i match reali
 ============================================ */
 
 let pyodide = null;
@@ -48,9 +50,7 @@ function hideModal(modal) {
 }
 
 function showError(message) {
-  if (errText) {
-    errText.textContent = message || "Si è verificato un errore.";
-  }
+  if (errText) errText.textContent = message || "Si è verificato un errore.";
   showModal(errModal);
 }
 
@@ -209,8 +209,8 @@ best_kind
     const kindFound = typeof res === "string" ? res : res.toJs();
 
     let ok = false;
-    if (kind === "tab") ok = (kindFound === "tabella");
-    if (kind === "sum") ok = (kindFound === "sumof");
+    if (kind === "tab") ok = kindFound === "tabella";
+    if (kind === "sum") ok = kindFound === "sumof";
 
     if (!ok) {
       if (kind === "tab") {
@@ -276,6 +276,8 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill
+
+APP_VERSION = "debug-admin-v1"
 
 def norm_id(x):
     if pd.isna(x):
@@ -410,11 +412,17 @@ def extract_stage_code_safe(a):
         return m2.group(1)
     return ""
 
-# lettura file
+# =========================
+# LETTURA FILE
+# =========================
+
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
 
-# tab clienti
+# =========================
+# TAB CLIENTI
+# =========================
+
 c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
 c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
 c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
@@ -429,18 +437,23 @@ c_inc  = pick_col(tab, ["INCASSATO"], fallback_idx=25)
 
 clients = pd.DataFrame({
     "ID_Soggetto": tab[c_id].apply(norm_id),
-    "Tipo": tab[c_tipo] if c_tipo else np.nan,
-    "Cliente_Tabella": tab[c_cli] if c_cli else np.nan,
-    "Referente_Commerciale": tab[c_ref] if c_ref else np.nan,
-    "Condomini_in_Albert": tab[c_ca] if c_ca else np.nan,
-    "Condomini_Amministrati": tab[c_cam] if c_cam else np.nan,
-    "PREVENTIVATO_EUR": tab[c_prev] if c_prev else np.nan,
-    "DELIBERATO_EUR": tab[c_del] if c_del else np.nan,
-    "FATTURATO_EUR": tab[c_fat] if c_fat else np.nan,
-    "INCASSATO_EUR": tab[c_inc] if c_inc else np.nan,
+    "Tipo": tab[c_tipo] if c_tipo is not None else np.nan,
+    "Cliente_Tabella": tab[c_cli] if c_cli is not None else np.nan,
+    "Referente_Commerciale": tab[c_ref] if c_ref is not None else np.nan,
+    "Condomini_in_Albert": tab[c_ca] if c_ca is not None else np.nan,
+    "Condomini_Amministrati": tab[c_cam] if c_cam is not None else np.nan,
+    "PREVENTIVATO_EUR": tab[c_prev] if c_prev is not None else np.nan,
+    "DELIBERATO_EUR": tab[c_del] if c_del is not None else np.nan,
+    "FATTURATO_EUR": tab[c_fat] if c_fat is not None else np.nan,
+    "INCASSATO_EUR": tab[c_inc] if c_inc is not None else np.nan,
 })
 
-# sum_of
+clients["ID_Soggetto"] = clients["ID_Soggetto"].astype(str).str.strip()
+
+# =========================
+# SUM OF
+# =========================
+
 s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
 s_mese = pick_col(su, ["MESE"], fallback_idx=1)
 s_att  = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=2)
@@ -457,6 +470,7 @@ sumdf = pd.DataFrame({
     "Nome_Soggetto_Sum": su[s_nome],
 })
 
+sumdf["ID_Soggetto"] = sumdf["ID_Soggetto"].astype(str).str.strip()
 sumdf["Anno"] = pd.to_numeric(sumdf["Anno"], errors="coerce").astype("Int64")
 sumdf["Mese_num"] = sumdf["Mese"].apply(month_to_int).astype("Int64")
 sumdf["Prio"] = sumdf["Attivita"].apply(activity_priority).astype(int)
@@ -464,7 +478,10 @@ sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
 
-# ultima attività
+# =========================
+# ULTIMA ATTIVITA
+# =========================
+
 best_in_month = (
     sumdf.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
          .groupby(["ID_Soggetto", "Periodo"], as_index=False)
@@ -500,19 +517,23 @@ corrispondenza = (
 final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
-# solo amministratori
+# =========================
+# SOLO AMMINISTRATORI
+# =========================
+
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
-
-# avanzamento solo amministratori
-today_period = date.today().year * 100 + date.today().month
 
 admins_base = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].copy()
 admins_base["ID_Soggetto"] = admins_base["ID_Soggetto"].astype(str).str.strip()
 
-adv_base = sumdf.copy()
-adv_base["ID_Soggetto"] = adv_base["ID_Soggetto"].astype(str).str.strip()
+# =========================
+# AVANZAMENTO SOLO AMMINISTRATORI
+# =========================
 
+today_period = date.today().year * 100 + date.today().month
+
+adv_base = sumdf.copy()
 adv_base["Stage_Code"] = adv_base["Attivita"].apply(extract_stage_code_safe)
 adv_base["Stage_Order"] = adv_base["Stage_Code"].map({
     "01": 1, "02": 2, "03": 3, "04": 4, "05": 5, "06": 6, "07": 7
@@ -602,7 +623,19 @@ for client_id, g in adv_base.groupby("ID_Soggetto"):
         "Ultima_Attivita_Fatta_Da": last_actor,
     })
 
-adv_df = pd.DataFrame(records, columns=[     "ID_Soggetto",     "Codice_Stadio_Attuale",     "Stadio_Attuale",     "Primo_Anno_Stadio_Attuale",     "Primo_Mese_Stadio_Attuale",     "Ultimo_Anno_Rilevato",     "Ultimo_Mese_Rilevato",     "Mesi_Fermo_Nello_Stadio",     "Stato_Avanzamento",     "Da_Riassegnare",     "Ultima_Attivita_Fatta_Da", ])
+adv_df = pd.DataFrame(records, columns=[
+    "ID_Soggetto",
+    "Codice_Stadio_Attuale",
+    "Stadio_Attuale",
+    "Primo_Anno_Stadio_Attuale",
+    "Primo_Mese_Stadio_Attuale",
+    "Ultimo_Anno_Rilevato",
+    "Ultimo_Mese_Rilevato",
+    "Mesi_Fermo_Nello_Stadio",
+    "Stato_Avanzamento",
+    "Da_Riassegnare",
+    "Ultima_Attivita_Fatta_Da",
+])
 
 avanzamento_clienti = admins_base.merge(
     adv_df,
@@ -668,7 +701,57 @@ sintesi_stato = (
     .sort_values("N_Clienti", ascending=False)
 )
 
-# output standard
+# =========================
+# DEBUG
+# =========================
+
+admins_ids = set(admins_base["ID_Soggetto"].astype(str))
+sum_ids = set(sumdf["ID_Soggetto"].astype(str))
+matched_ids = admins_ids.intersection(sum_ids)
+missing_ids = admins_ids.difference(sum_ids)
+
+debug_info = pd.DataFrame([
+    ["APP_VERSION", APP_VERSION],
+    ["N_admins_tabella", len(admins_base)],
+    ["N_admins_con_match_sumof", len(matched_ids)],
+    ["N_admins_senza_match_sumof", len(missing_ids)],
+    ["N_righe_adv_base_dopo_merge_admin", len(adv_base)],
+    ["N_records_avanzamento", len(records)],
+    ["N_avanzamento_stadio_valorizzato", int(avanzamento_clienti["Stadio_Attuale"].notna().sum())],
+    ["N_avanzamento_nessuna_attivita", int((avanzamento_clienti["Stato_Avanzamento"] == "Nessuna attività").sum())],
+], columns=["Voce", "Valore"])
+
+debug_id_match = admins_base.copy()
+debug_id_match["Trovato_in_Sum_of"] = debug_id_match["ID_Soggetto"].isin(sum_ids).map({True:"Si", False:"No"})
+
+sum_count = (
+    sumdf.groupby("ID_Soggetto")
+    .size()
+    .reset_index(name="Numero_Righe_Sum_of")
+)
+
+sum_last = (
+    sumdf.sort_values(["ID_Soggetto","Periodo","_row"])
+    .groupby("ID_Soggetto", as_index=False)
+    .tail(1)[["ID_Soggetto","Attivita","Anno","Mese_num","Chi"]]
+    .rename(columns={
+        "Attivita":"Ultima_Attivita_Sum_of",
+        "Anno":"Ultimo_Anno_Sum_of",
+        "Mese_num":"Ultimo_Mese_Sum_of",
+        "Chi":"Ultima_Attivita_Fatta_Da_Sum_of"
+    })
+)
+
+debug_id_match = (
+    debug_id_match
+    .merge(sum_count, on="ID_Soggetto", how="left")
+    .merge(sum_last, on="ID_Soggetto", how="left")
+)
+
+# =========================
+# OUTPUT STANDARD
+# =========================
+
 output_cols = [
     "Cliente",
     "Referente_Commerciale",
@@ -705,8 +788,14 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     avanzamento_clienti.to_excel(writer, sheet_name="Avanzamento_Clienti", index=False)
     sintesi_avanzamento.to_excel(writer, sheet_name="Sintesi_Avanzamento", index=False)
     sintesi_stato.to_excel(writer, sheet_name="Sintesi_Stato", index=False)
+    debug_info.to_excel(writer, sheet_name="DEBUG_Info", index=False)
+    debug_id_match.to_excel(writer, sheet_name="DEBUG_ID_Match", index=False)
 
-    used = {"Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato"}
+    used = {
+        "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
+        "Sintesi_Avanzamento", "Sintesi_Stato",
+        "DEBUG_Info", "DEBUG_ID_Match"
+    }
 
     for tipo, df_t in final.groupby(final["Tipo"].fillna("Senza_Tipo"), dropna=False):
         sheet = sanitize_sheet_name(tipo)
@@ -726,7 +815,11 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     type_sheets = [
         s for s in wb.sheetnames
-        if s not in ("Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato")
+        if s not in (
+            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
+            "Sintesi_Avanzamento", "Sintesi_Stato",
+            "DEBUG_Info", "DEBUG_ID_Match"
+        )
     ]
 
     for sname in type_sheets:
@@ -763,7 +856,11 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     admin_sheet = None
     for s in wb.sheetnames:
-        if s not in ("Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato") and "amministr" in s.lower():
+        if s not in (
+            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
+            "Sintesi_Avanzamento", "Sintesi_Stato",
+            "DEBUG_Info", "DEBUG_ID_Match"
+        ) and "amministr" in s.lower():
             admin_sheet = s
             break
 

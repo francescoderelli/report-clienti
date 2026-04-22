@@ -1,11 +1,7 @@
 /* ============================================
    app.js - Report Clienti
-   Versione completa con:
-   - verifica singolo file
-   - messaggio errore reale
-   - report standard
-   - avanzamento solo amministratori
-   - fogli DEBUG per capire i match reali
+   Versione robusta con avanzamento mensile
+   per il foglio Amministratore
 ============================================ */
 
 let pyodide = null;
@@ -277,8 +273,6 @@ from dateutil.relativedelta import relativedelta
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill
 
-APP_VERSION = "debug-admin-v1"
-
 def norm_id(x):
     if pd.isna(x):
         return ""
@@ -341,11 +335,6 @@ def period_to_year_month(period):
     period = int(period)
     return period // 100, period % 100
 
-def months_diff(period_from, period_to):
-    y1, m1 = period_to_year_month(period_from)
-    y2, m2 = period_to_year_month(period_to)
-    return (y2 - y1) * 12 + (m2 - m1)
-
 def find_header_row(xlsx_bytes, expected_type):
     df0 = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=None)
     for i in range(min(80, len(df0))):
@@ -368,7 +357,6 @@ def read_excel_robust(xlsx_bytes, expected_type):
             return df
     except:
         pass
-
     header_row = find_header_row(xlsx_bytes, expected_type)
     return pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=header_row)
 
@@ -400,17 +388,26 @@ def stage_label_from_code(code):
     }
     return mapping.get(code, code)
 
-def extract_stage_code_safe(a):
-    if pd.isna(a):
-        return ""
-    s = str(a).strip().upper()
-    m = re.match(r"^\\s*(\\d{2})", s)
-    if m:
-        return m.group(1)
-    m2 = re.search(r"\\b(0[1-7])\\b", s)
-    if m2:
-        return m2.group(1)
-    return ""
+def trend_label(v_old, v_m2, v_m1, v_cur):
+    pr = {"":0, None:0, np.nan:0, "Telefonata":1, "Appuntamento":2, "Incontro":3, "Richiesta":4, "Sopralluogo":5, "Preventivo":6, "Delibera":7}
+    a = pr.get(v_m1, 0)
+    b = pr.get(v_cur, 0)
+
+    if b == 7:
+        return "Deliberato"
+    if a == 0 and b == 0 and pr.get(v_m2, 0) == 0 and pr.get(v_old, 0) == 0:
+        return "Nessuna attività"
+    if a == 0 and b > 0:
+        return "Riparte"
+    if a > 0 and b == 0:
+        return "Fermo"
+    if b > a:
+        return "Avanza"
+    if b == a and b > 0:
+        return "Stabile"
+    if b < a:
+        return "Arretra"
+    return "Da verificare"
 
 # =========================
 # LETTURA FILE
@@ -478,16 +475,17 @@ sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
 
-# =========================
-# ULTIMA ATTIVITA
-# =========================
+sumdf["Stage_Code"] = sumdf["Attivita"].astype(str).str.extract(r'^\s*(\d{2})', expand=False).fillna("")
+sumdf["Stage_Name"] = sumdf["Stage_Code"].apply(stage_label_from_code)
 
+# migliore attività per soggetto e periodo
 best_in_month = (
     sumdf.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
          .groupby(["ID_Soggetto", "Periodo"], as_index=False)
          .tail(1)
 )
 
+# ultima attività generale
 best_last = (
     best_in_month.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
                  .groupby("ID_Soggetto", as_index=False)
@@ -518,146 +516,77 @@ final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
 # =========================
-# SOLO AMMINISTRATORI
+# BLOCCO AMMINISTRATORI
 # =========================
 
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
-
 admins_base = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].copy()
 admins_base["ID_Soggetto"] = admins_base["ID_Soggetto"].astype(str).str.strip()
 
-# =========================
-# AVANZAMENTO SOLO AMMINISTRATORI
-# =========================
+# mese massimo presente nel file
+max_period = int(best_in_month["Periodo"].max()) if len(best_in_month) else None
 
-today_period = date.today().year * 100 + date.today().month
+if max_period is not None:
+    y = max_period // 100
+    m = max_period % 100
+    cur_date = pd.Timestamp(year=y, month=m, day=1)
+    prev1 = int((cur_date - pd.DateOffset(months=1)).strftime("%Y%m"))
+    prev2 = int((cur_date - pd.DateOffset(months=2)).strftime("%Y%m"))
+else:
+    prev1 = None
+    prev2 = None
 
-adv_base = sumdf.copy()
-adv_base["Stage_Code"] = adv_base["Attivita"].apply(extract_stage_code_safe)
-adv_base["Stage_Order"] = adv_base["Stage_Code"].map({
-    "01": 1, "02": 2, "03": 3, "04": 4, "05": 5, "06": 6, "07": 7
-}).fillna(0).astype(int)
-
-adv_base["Stage_Order_Final"] = np.where(
-    adv_base["Stage_Order"] > 0,
-    adv_base["Stage_Order"],
-    adv_base["Prio"]
-).astype(int)
-
-prio_to_code = {2:"01", 1:"02", 4:"03", 5:"04", 3:"05", 6:"06", 7:"07"}
-adv_base["Stage_Code_Final"] = adv_base["Stage_Code"]
-mask_missing_code = adv_base["Stage_Code_Final"].eq("") & adv_base["Stage_Order_Final"].gt(0)
-adv_base.loc[mask_missing_code, "Stage_Code_Final"] = adv_base.loc[mask_missing_code, "Prio"].map(prio_to_code).fillna("")
-adv_base["Stage_Name_Final"] = adv_base["Stage_Code_Final"].apply(stage_label_from_code)
-
-adv_base = adv_base.merge(
+admin_months = best_in_month.merge(
     admins_base[["ID_Soggetto"]],
     on="ID_Soggetto",
     how="inner"
+).copy()
+
+cur_df = admin_months[admin_months["Periodo"] == max_period][["ID_Soggetto", "Attivita", "Chi"]].copy() if max_period is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita","Chi"])
+cur_df.rename(columns={"Attivita":"Ultima attività", "Chi":"Ultima_Attivita_Fatta_Da"}, inplace=True)
+
+m1_df = admin_months[admin_months["Periodo"] == prev1][["ID_Soggetto", "Attivita"]].copy() if prev1 is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita"])
+m1_df.rename(columns={"Attivita":"Ultima attività mese precedente"}, inplace=True)
+
+m2_df = admin_months[admin_months["Periodo"] == prev2][["ID_Soggetto", "Attivita"]].copy() if prev2 is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita"])
+m2_df.rename(columns={"Attivita":"Ultima attività 2 mesi precedenti"}, inplace=True)
+
+old_df = admin_months[admin_months["Periodo"] < prev2].copy() if prev2 is not None else pd.DataFrame(columns=admin_months.columns)
+if len(old_df):
+    old_best = (
+        old_df.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
+              .groupby("ID_Soggetto", as_index=False)
+              .tail(1)[["ID_Soggetto", "Attivita"]]
+              .copy()
+    )
+else:
+    old_best = pd.DataFrame(columns=["ID_Soggetto","Attivita"])
+old_best.rename(columns={"Attivita":"Ultima attività oltre 2 mesi precedenti"}, inplace=True)
+
+avanzamento_clienti = admins_base.merge(old_best, on="ID_Soggetto", how="left")
+avanzamento_clienti = avanzamento_clienti.merge(m2_df, on="ID_Soggetto", how="left")
+avanzamento_clienti = avanzamento_clienti.merge(m1_df, on="ID_Soggetto", how="left")
+avanzamento_clienti = avanzamento_clienti.merge(cur_df, on="ID_Soggetto", how="left")
+
+avanzamento_clienti["Trend_Attività"] = avanzamento_clienti.apply(
+    lambda r: trend_label(
+        r.get("Ultima attività oltre 2 mesi precedenti"),
+        r.get("Ultima attività 2 mesi precedenti"),
+        r.get("Ultima attività mese precedente"),
+        r.get("Ultima attività")
+    ),
+    axis=1
 )
-
-adv_base = adv_base[adv_base["Stage_Order_Final"] > 0].copy()
-adv_base = adv_base.sort_values(["ID_Soggetto", "Periodo", "Stage_Order_Final", "_row"]).copy()
-
-records = []
-
-for client_id, g in adv_base.groupby("ID_Soggetto"):
-    g = g.sort_values(["Periodo", "Stage_Order_Final", "_row"]).copy()
-
-    max_stage_so_far = 0
-    current_stage_code = ""
-    current_stage_name = ""
-    first_period_current_stage = None
-
-    for _, row in g.iterrows():
-        row_stage = int(row["Stage_Order_Final"])
-        row_code = row["Stage_Code_Final"]
-        row_name = row["Stage_Name_Final"]
-        row_period = int(row["Periodo"])
-
-        if row_stage > max_stage_so_far:
-            max_stage_so_far = row_stage
-            current_stage_code = row_code
-            current_stage_name = row_name
-            first_period_current_stage = row_period
-
-    if first_period_current_stage is None:
-        continue
-
-    last_row = g.sort_values(["Periodo", "_row"]).iloc[-1]
-    last_period_seen = int(last_row["Periodo"])
-    last_actor = last_row["Chi"] if "Chi" in g.columns else np.nan
-    mesi_fermo = months_diff(first_period_current_stage, today_period)
-
-    if current_stage_code == "07":
-        stato_avanzamento = "Deliberato"
-        da_riassegnare = "No"
-    elif current_stage_code in ("01", "02", "03", "04", "05") and mesi_fermo >= 1:
-        stato_avanzamento = "Da riassegnare"
-        da_riassegnare = "Si"
-    elif current_stage_code == "06" and mesi_fermo >= 2:
-        stato_avanzamento = "Da riassegnare"
-        da_riassegnare = "Si"
-    elif mesi_fermo == 0:
-        stato_avanzamento = "Avanza"
-        da_riassegnare = "No"
-    else:
-        stato_avanzamento = "Fermo"
-        da_riassegnare = "No"
-
-    anno_stage, mese_stage = period_to_year_month(first_period_current_stage)
-    anno_last, mese_last = period_to_year_month(last_period_seen)
-
-    records.append({
-        "ID_Soggetto": client_id,
-        "Codice_Stadio_Attuale": current_stage_code,
-        "Stadio_Attuale": current_stage_name,
-        "Primo_Anno_Stadio_Attuale": anno_stage,
-        "Primo_Mese_Stadio_Attuale": mese_stage,
-        "Ultimo_Anno_Rilevato": anno_last,
-        "Ultimo_Mese_Rilevato": mese_last,
-        "Mesi_Fermo_Nello_Stadio": mesi_fermo,
-        "Stato_Avanzamento": stato_avanzamento,
-        "Da_Riassegnare": da_riassegnare,
-        "Ultima_Attivita_Fatta_Da": last_actor,
-    })
-
-adv_df = pd.DataFrame(records, columns=[
-    "ID_Soggetto",
-    "Codice_Stadio_Attuale",
-    "Stadio_Attuale",
-    "Primo_Anno_Stadio_Attuale",
-    "Primo_Mese_Stadio_Attuale",
-    "Ultimo_Anno_Rilevato",
-    "Ultimo_Mese_Rilevato",
-    "Mesi_Fermo_Nello_Stadio",
-    "Stato_Avanzamento",
-    "Da_Riassegnare",
-    "Ultima_Attivita_Fatta_Da",
-])
-
-avanzamento_clienti = admins_base.merge(
-    adv_df,
-    on="ID_Soggetto",
-    how="left"
-)
-
-avanzamento_clienti["Stato_Avanzamento"] = avanzamento_clienti["Stato_Avanzamento"].fillna("Nessuna attività")
-avanzamento_clienti["Da_Riassegnare"] = avanzamento_clienti["Da_Riassegnare"].fillna("No")
 
 adv_cols = [
     "Cliente",
     "Referente_Commerciale",
-    "Codice_Stadio_Attuale",
-    "Stadio_Attuale",
-    "Primo_Anno_Stadio_Attuale",
-    "Primo_Mese_Stadio_Attuale",
-    "Ultimo_Anno_Rilevato",
-    "Ultimo_Mese_Rilevato",
-    "Mesi_Fermo_Nello_Stadio",
-    "Stato_Avanzamento",
-    "Da_Riassegnare",
+    "Ultima attività oltre 2 mesi precedenti",
+    "Ultima attività 2 mesi precedenti",
+    "Ultima attività mese precedente",
+    "Ultima attività",
+    "Trend_Attività",
     "Ultima_Attivita_Fatta_Da",
 ]
 
@@ -667,85 +596,20 @@ for col in adv_cols:
 
 avanzamento_clienti = avanzamento_clienti[adv_cols].copy()
 
-stage_sort_map = {
-    "Telefonata": 1, "Appuntamento": 2, "Incontro": 3, "Richiesta": 4,
-    "Sopralluogo": 5, "Preventivo": 6, "Delibera": 7
-}
-status_sort_map = {
-    "Da riassegnare": 1, "Fermo": 2, "Avanza": 3, "Deliberato": 4, "Nessuna attività": 5
-}
-
-avanzamento_clienti["_stage_sort"] = avanzamento_clienti["Stadio_Attuale"].map(stage_sort_map).fillna(99)
-avanzamento_clienti["_status_sort"] = avanzamento_clienti["Stato_Avanzamento"].map(status_sort_map).fillna(99)
-avanzamento_clienti["_mesi_sort"] = pd.to_numeric(avanzamento_clienti["Mesi_Fermo_Nello_Stadio"], errors="coerce").fillna(-1)
-
-avanzamento_clienti = (
-    avanzamento_clienti
-    .sort_values(["_status_sort", "_stage_sort", "_mesi_sort", "Cliente"], ascending=[True, True, False, True])
-    .drop(columns=["_stage_sort", "_status_sort", "_mesi_sort"])
-)
-
 sintesi_avanzamento = (
     avanzamento_clienti
-    .groupby(["Stadio_Attuale", "Stato_Avanzamento"], dropna=False)
+    .groupby(["Ultima attività", "Trend_Attività"], dropna=False)
     .size()
     .reset_index(name="N_Clienti")
-    .sort_values(["Stadio_Attuale", "Stato_Avanzamento", "N_Clienti"], ascending=[True, True, False])
+    .sort_values(["Ultima attività", "Trend_Attività", "N_Clienti"], ascending=[True, True, False])
 )
 
 sintesi_stato = (
     avanzamento_clienti
-    .groupby(["Stato_Avanzamento"], dropna=False)
+    .groupby(["Trend_Attività"], dropna=False)
     .size()
     .reset_index(name="N_Clienti")
     .sort_values("N_Clienti", ascending=False)
-)
-
-# =========================
-# DEBUG
-# =========================
-
-admins_ids = set(admins_base["ID_Soggetto"].astype(str))
-sum_ids = set(sumdf["ID_Soggetto"].astype(str))
-matched_ids = admins_ids.intersection(sum_ids)
-missing_ids = admins_ids.difference(sum_ids)
-
-debug_info = pd.DataFrame([
-    ["APP_VERSION", APP_VERSION],
-    ["N_admins_tabella", len(admins_base)],
-    ["N_admins_con_match_sumof", len(matched_ids)],
-    ["N_admins_senza_match_sumof", len(missing_ids)],
-    ["N_righe_adv_base_dopo_merge_admin", len(adv_base)],
-    ["N_records_avanzamento", len(records)],
-    ["N_avanzamento_stadio_valorizzato", int(avanzamento_clienti["Stadio_Attuale"].notna().sum())],
-    ["N_avanzamento_nessuna_attivita", int((avanzamento_clienti["Stato_Avanzamento"] == "Nessuna attività").sum())],
-], columns=["Voce", "Valore"])
-
-debug_id_match = admins_base.copy()
-debug_id_match["Trovato_in_Sum_of"] = debug_id_match["ID_Soggetto"].isin(sum_ids).map({True:"Si", False:"No"})
-
-sum_count = (
-    sumdf.groupby("ID_Soggetto")
-    .size()
-    .reset_index(name="Numero_Righe_Sum_of")
-)
-
-sum_last = (
-    sumdf.sort_values(["ID_Soggetto","Periodo","_row"])
-    .groupby("ID_Soggetto", as_index=False)
-    .tail(1)[["ID_Soggetto","Attivita","Anno","Mese_num","Chi"]]
-    .rename(columns={
-        "Attivita":"Ultima_Attivita_Sum_of",
-        "Anno":"Ultimo_Anno_Sum_of",
-        "Mese_num":"Ultimo_Mese_Sum_of",
-        "Chi":"Ultima_Attivita_Fatta_Da_Sum_of"
-    })
-)
-
-debug_id_match = (
-    debug_id_match
-    .merge(sum_count, on="ID_Soggetto", how="left")
-    .merge(sum_last, on="ID_Soggetto", how="left")
 )
 
 # =========================
@@ -788,14 +652,8 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     avanzamento_clienti.to_excel(writer, sheet_name="Avanzamento_Clienti", index=False)
     sintesi_avanzamento.to_excel(writer, sheet_name="Sintesi_Avanzamento", index=False)
     sintesi_stato.to_excel(writer, sheet_name="Sintesi_Stato", index=False)
-    debug_info.to_excel(writer, sheet_name="DEBUG_Info", index=False)
-    debug_id_match.to_excel(writer, sheet_name="DEBUG_ID_Match", index=False)
 
-    used = {
-        "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
-        "Sintesi_Avanzamento", "Sintesi_Stato",
-        "DEBUG_Info", "DEBUG_ID_Match"
-    }
+    used = {"Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato"}
 
     for tipo, df_t in final.groupby(final["Tipo"].fillna("Senza_Tipo"), dropna=False):
         sheet = sanitize_sheet_name(tipo)
@@ -815,11 +673,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     type_sheets = [
         s for s in wb.sheetnames
-        if s not in (
-            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
-            "Sintesi_Avanzamento", "Sintesi_Stato",
-            "DEBUG_Info", "DEBUG_ID_Match"
-        )
+        if s not in ("Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato")
     ]
 
     for sname in type_sheets:
@@ -834,20 +688,23 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
     RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    YELLOW = PatternFill(fill_type="solid", fgColor="FFF2CC")
 
     if "Avanzamento_Clienti" in wb.sheetnames:
         ws = wb["Avanzamento_Clienti"]
         header = [c.value for c in ws[1]]
         try:
-            col_stato = header.index("Stato_Avanzamento") + 1
+            col_trend = header.index("Trend_Attività") + 1
             max_col = ws.max_column
             for r in range(2, ws.max_row + 1):
-                stato = str(ws.cell(r, col_stato).value or "").strip()
+                trend = str(ws.cell(r, col_trend).value or "").strip()
                 fill = None
-                if stato == "Da riassegnare":
-                    fill = RED
-                elif stato in ("Avanza", "Deliberato"):
+                if trend in ("Avanza", "Riparte", "Deliberato"):
                     fill = GREEN
+                elif trend in ("Fermo", "Arretra"):
+                    fill = RED
+                elif trend in ("Stabile", "Da verificare"):
+                    fill = YELLOW
                 if fill:
                     for c in range(1, max_col + 1):
                         ws.cell(r, c).fill = fill
@@ -856,11 +713,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     admin_sheet = None
     for s in wb.sheetnames:
-        if s not in (
-            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
-            "Sintesi_Avanzamento", "Sintesi_Stato",
-            "DEBUG_Info", "DEBUG_ID_Match"
-        ) and "amministr" in s.lower():
+        if s not in ("Riepilogo", "Corrispondenza", "Avanzamento_Clienti", "Sintesi_Avanzamento", "Sintesi_Stato") and "amministr" in s.lower():
             admin_sheet = s
             break
 

@@ -1,12 +1,6 @@
 /* ============================================
    app.js - Report Clienti
-   Versione evoluta:
-   - verifica singolo file
-   - errore reale in modal
-   - report standard
-   - avanzamento amministratori evoluto
-   - sintesi per referente
-   - fogli Da_Riassegnare e Anomalie
+   Versione evoluta e corretta
 ============================================ */
 
 let pyodide = null;
@@ -282,9 +276,9 @@ def norm_id(x):
     if pd.isna(x):
         return ""
     s = str(x).strip()
-    s = s.replace("\\u00A0", "")
-    s = re.sub(r"\\s+", "", s)
-    s = re.sub(r"\\.0$", "", s)
+    s = s.replace("\u00A0", "")
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"\.0$", "", s)
     return s
 
 def sanitize_sheet_name(name: str) -> str:
@@ -350,23 +344,6 @@ def activity_priority(a):
     if "appunt" in low:
         return 1
     return 0
-
-def period_to_year_month(period):
-    period = int(period)
-    return period // 100, period % 100
-
-def rank_to_label(rank):
-    mp = {
-        0: "",
-        1: "Appuntamento",
-        2: "Telefonata",
-        3: "Sopralluogo",
-        4: "Incontro",
-        5: "Richiesta",
-        6: "Preventivo",
-        7: "Delibera",
-    }
-    return mp.get(int(rank), "")
 
 def activity_to_rank(v):
     if pd.isna(v):
@@ -438,7 +415,6 @@ def mesi_senza_miglioramento(ranks):
     return months
 
 def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, cur_val):
-    # Delibera mai da riassegnare
     if last_rank == 7:
         return "No"
 
@@ -447,23 +423,18 @@ def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, c
     m1_r  = activity_to_rank(m1_val)
     cur_r = activity_to_rank(cur_val)
 
-    # Nessuna attività assoluta -> da riassegnare
     if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
         return "Si"
 
-    # Nessuna attività recente ma storico presente -> da riassegnare
     if trend == "Nessuna attività":
         return "Si"
 
-    # Arretra -> da riassegnare
     if trend == "Arretra":
         return "Si"
 
-    # Fermo -> più aggressivo
     if trend == "Fermo":
         return "Si"
 
-    # Regole per stadio
     if last_rank in (1, 2) and mesi_no_improve >= 1:
         return "Si"
     if last_rank in (3, 4, 5) and mesi_no_improve >= 1:
@@ -567,7 +538,6 @@ def pick_col(df, keys, fallback_idx=None):
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
 
-# Tabella clienti
 c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
 c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
 c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
@@ -594,7 +564,6 @@ clients = pd.DataFrame({
 })
 clients["ID_Soggetto"] = clients["ID_Soggetto"].astype(str).str.strip()
 
-# Sum_of
 s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
 s_mese = pick_col(su, ["MESE"], fallback_idx=1)
 s_att  = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=2)
@@ -653,7 +622,6 @@ corrispondenza = (
 final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
-# Solo amministratori
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
 admins_base = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].copy()
@@ -698,7 +666,6 @@ else:
     old_best = pd.DataFrame(columns=["ID_Soggetto","Attivita","Prio"])
 old_best.rename(columns={"Attivita":"Ultima attività oltre 2 mesi precedenti", "Prio":"Prio_old"}, inplace=True)
 
-# storico sintetico per mesi senza miglioramento
 history_periods = sorted(admin_months["Periodo"].dropna().astype(int).unique().tolist())
 hist_wide = pd.DataFrame({"ID_Soggetto": admins_base["ID_Soggetto"].unique()})
 
@@ -750,10 +717,20 @@ def detect_anomalia(r):
     return "No"
 
 avanzamento_clienti["Anomalia"] = avanzamento_clienti.apply(detect_anomalia, axis=1)
+
 avanzamento_clienti["Da_Riassegnare"] = avanzamento_clienti.apply(
-    lambda r: da_riassegnare(int(r.get("Ultimo_Rank", 0) or 0), int(r.get("Mesi_senza_miglioramento", 0) or 0)),
+    lambda r: da_riassegnare(
+        int(r.get("Ultimo_Rank", 0) or 0),
+        int(r.get("Mesi_senza_miglioramento", 0) or 0),
+        r.get("Trend_Mensile"),
+        r.get("Ultima attività oltre 2 mesi precedenti"),
+        r.get("Ultima attività 2 mesi precedenti"),
+        r.get("Ultima attività mese precedente"),
+        r.get("Ultima attività"),
+    ),
     axis=1
 )
+
 avanzamento_clienti["Esito_Manageriale"] = avanzamento_clienti.apply(
     lambda r: esito_manageriale(
         int(r.get("Ultimo_Rank", 0) or 0),
@@ -762,6 +739,7 @@ avanzamento_clienti["Esito_Manageriale"] = avanzamento_clienti.apply(
     ),
     axis=1
 )
+
 avanzamento_clienti["Azione_Consigliata"] = avanzamento_clienti.apply(
     lambda r: azione_consigliata(
         int(r.get("Ultimo_Rank", 0) or 0),
@@ -804,6 +782,7 @@ status_sort_map = {
     "Nessuna attività": 7,
     "Da verificare": 8,
 }
+
 avanzamento_clienti["_trend_sort"] = avanzamento_clienti["Trend_Mensile"].map(status_sort_map).fillna(99)
 avanzamento_clienti["_mesi_sort"] = pd.to_numeric(avanzamento_clienti["Mesi_senza_miglioramento"], errors="coerce").fillna(-1)
 
@@ -841,7 +820,6 @@ sintesi_per_referente = (
 da_riassegnare_df = avanzamento_clienti[avanzamento_clienti["Da_Riassegnare"] == "Si"].copy()
 anomalie_df = avanzamento_clienti[avanzamento_clienti["Anomalia"] == "Si"].copy()
 
-# Output standard
 output_cols = [
     "Cliente",
     "Referente_Commerciale",

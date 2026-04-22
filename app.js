@@ -602,7 +602,7 @@ for client_id, g in adv_base.groupby("ID_Soggetto"):
         "Ultima_Attivita_Fatta_Da": last_actor,
     })
 
-adv_df = pd.DataFrame(records)
+adv_df = pd.DataFrame(records, columns=[     "ID_Soggetto",     "Codice_Stadio_Attuale",     "Stadio_Attuale",     "Primo_Anno_Stadio_Attuale",     "Primo_Mese_Stadio_Attuale",     "Ultimo_Anno_Rilevato",     "Ultimo_Mese_Rilevato",     "Mesi_Fermo_Nello_Stadio",     "Stato_Avanzamento",     "Da_Riassegnare",     "Ultima_Attivita_Fatta_Da", ])
 
 avanzamento_clienti = admins_base.merge(
     adv_df,

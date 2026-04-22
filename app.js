@@ -388,24 +388,67 @@ def stage_label_from_code(code):
     }
     return mapping.get(code, code)
 
-def trend_label(v_old, v_m2, v_m1, v_cur):
-    pr = {"":0, None:0, np.nan:0, "Telefonata":1, "Appuntamento":2, "Incontro":3, "Richiesta":4, "Sopralluogo":5, "Preventivo":6, "Delibera":7}
-    a = pr.get(v_m1, 0)
-    b = pr.get(v_cur, 0)
+def activity_to_rank(v):
+    if pd.isna(v):
+        return 0
 
-    if b == 7:
+    s = str(v).strip()
+    if s == "":
+        return 0
+
+    # prova a leggere il codice iniziale 01..07
+    m = re.match(r"^\s*(\d{2})", s)
+    if m:
+        code = m.group(1)
+        code_map = {
+            "01": 1,
+            "02": 2,
+            "03": 3,
+            "04": 4,
+            "05": 5,
+            "06": 6,
+            "07": 7,
+        }
+        return code_map.get(code, 0)
+
+    # fallback su parole chiave
+    low = s.lower()
+    if "telefon" in low:
+        return 1
+    if "appunt" in low:
+        return 2
+    if "incontr" in low:
+        return 3
+    if "richiest" in low:
+        return 4
+    if "sopralluog" in low:
+        return 5
+    if "preventiv" in low:
+        return 6
+    if "deliber" in low:
+        return 7
+
+    return 0
+
+def trend_label(v_old, v_m2, v_m1, v_cur):
+    old_r = activity_to_rank(v_old)
+    m2_r  = activity_to_rank(v_m2)
+    m1_r  = activity_to_rank(v_m1)
+    cur_r = activity_to_rank(v_cur)
+
+    if cur_r == 7:
         return "Deliberato"
-    if a == 0 and b == 0 and pr.get(v_m2, 0) == 0 and pr.get(v_old, 0) == 0:
+    if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
         return "Nessuna attività"
-    if a == 0 and b > 0:
+    if m1_r == 0 and cur_r > 0:
         return "Riparte"
-    if a > 0 and b == 0:
+    if m1_r > 0 and cur_r == 0:
         return "Fermo"
-    if b > a:
+    if cur_r > m1_r:
         return "Avanza"
-    if b == a and b > 0:
+    if cur_r == m1_r and cur_r > 0:
         return "Stabile"
-    if b < a:
+    if cur_r < m1_r:
         return "Arretra"
     return "Da verificare"
 

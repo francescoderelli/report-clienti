@@ -1,6 +1,8 @@
 /* ============================================
    app.js - Report Clienti
-   Versione evoluta e corretta
+   Versione evoluta con:
+   - Da_Riassegnare più stretto
+   - Da_Attenzionare separato
 ============================================ */
 
 let pyodide = null;
@@ -414,7 +416,7 @@ def mesi_senza_miglioramento(ranks):
             months += 1
     return months
 
-def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, cur_val):
+def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, cur_val, anomalia):
     if last_rank == 7:
         return "No"
 
@@ -426,22 +428,30 @@ def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, c
     if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
         return "Si"
 
-    if trend == "Nessuna attività":
+    if trend in ("Fermo", "Arretra", "Nessuna attività"):
         return "Si"
 
-    if trend == "Arretra":
+    if anomalia == "Si" and last_rank >= 5:
         return "Si"
 
-    if trend == "Fermo":
+    if last_rank in (1, 2) and mesi_no_improve >= 3:
+        return "Si"
+    if last_rank in (3, 4, 5) and mesi_no_improve >= 2:
+        return "Si"
+    if last_rank == 6 and mesi_no_improve >= 3:
         return "Si"
 
-    if last_rank in (1, 2) and mesi_no_improve >= 1:
-        return "Si"
-    if last_rank in (3, 4, 5) and mesi_no_improve >= 1:
-        return "Si"
-    if last_rank == 6 and mesi_no_improve >= 2:
-        return "Si"
+    return "No"
 
+def da_attenzionare(last_rank, mesi_no_improve, trend, anomalia):
+    if trend in ("Avanza", "Riparte") and mesi_no_improve >= 2:
+        return "Si"
+    if trend == "Stabile" and mesi_no_improve >= 2:
+        return "Si"
+    if anomalia == "Si":
+        return "Si"
+    if last_rank > 0 and mesi_no_improve >= 2:
+        return "Si"
     return "No"
 
 def esito_manageriale(last_rank, trend, mesi_no_improve):
@@ -469,11 +479,13 @@ def esito_manageriale(last_rank, trend, mesi_no_improve):
         return "Freddo"
     return "Da verificare"
 
-def azione_consigliata(last_rank, trend, dr, anomalia):
+def azione_consigliata(last_rank, trend, dr, da_att, anomalia):
     if anomalia == "Si":
         return "Controllo manuale"
     if dr == "Si":
         return "Valutare riassegnazione"
+    if da_att == "Si":
+        return "Attenzionare"
     if last_rank == 7:
         return "Chiudere e consolidare"
     if trend == "Avanza":
@@ -534,6 +546,20 @@ def pick_col(df, keys, fallback_idx=None):
     if fallback_idx is not None and df.shape[1] > fallback_idx:
         return df.columns[fallback_idx]
     return None
+
+def detect_anomalia(r):
+    old_r = activity_to_rank(r.get("Ultima attività oltre 2 mesi precedenti"))
+    m2_r = activity_to_rank(r.get("Ultima attività 2 mesi precedenti"))
+    m1_r = activity_to_rank(r.get("Ultima attività mese precedente"))
+    cur_r = activity_to_rank(r.get("Ultima attività"))
+
+    if cur_r > 0 and m1_r > 0 and cur_r < m1_r:
+        return "Si"
+    if old_r == 7 and cur_r > 0 and cur_r < 7:
+        return "Si"
+    if m2_r == 7 and (m1_r > 0 and m1_r < 7):
+        return "Si"
+    return "No"
 
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
@@ -701,21 +727,6 @@ avanzamento_clienti["Trend_Mensile"] = avanzamento_clienti.apply(
 
 avanzamento_clienti["Ultimo_Rank"] = avanzamento_clienti["Ultima attività"].apply(activity_to_rank)
 avanzamento_clienti["Mesi_senza_miglioramento"] = avanzamento_clienti.apply(calc_mesi_no_improve_row, axis=1)
-
-def detect_anomalia(r):
-    old_r = activity_to_rank(r.get("Ultima attività oltre 2 mesi precedenti"))
-    m2_r = activity_to_rank(r.get("Ultima attività 2 mesi precedenti"))
-    m1_r = activity_to_rank(r.get("Ultima attività mese precedente"))
-    cur_r = activity_to_rank(r.get("Ultima attività"))
-
-    if cur_r > 0 and m1_r > 0 and cur_r < m1_r:
-        return "Si"
-    if old_r == 7 and cur_r > 0 and cur_r < 7:
-        return "Si"
-    if m2_r == 7 and (m1_r > 0 and m1_r < 7):
-        return "Si"
-    return "No"
-
 avanzamento_clienti["Anomalia"] = avanzamento_clienti.apply(detect_anomalia, axis=1)
 
 avanzamento_clienti["Da_Riassegnare"] = avanzamento_clienti.apply(
@@ -727,6 +738,17 @@ avanzamento_clienti["Da_Riassegnare"] = avanzamento_clienti.apply(
         r.get("Ultima attività 2 mesi precedenti"),
         r.get("Ultima attività mese precedente"),
         r.get("Ultima attività"),
+        r.get("Anomalia"),
+    ),
+    axis=1
+)
+
+avanzamento_clienti["Da_Attenzionare"] = avanzamento_clienti.apply(
+    lambda r: da_attenzionare(
+        int(r.get("Ultimo_Rank", 0) or 0),
+        int(r.get("Mesi_senza_miglioramento", 0) or 0),
+        r.get("Trend_Mensile"),
+        r.get("Anomalia"),
     ),
     axis=1
 )
@@ -745,6 +767,7 @@ avanzamento_clienti["Azione_Consigliata"] = avanzamento_clienti.apply(
         int(r.get("Ultimo_Rank", 0) or 0),
         r.get("Trend_Mensile"),
         r.get("Da_Riassegnare"),
+        r.get("Da_Attenzionare"),
         r.get("Anomalia")
     ),
     axis=1
@@ -760,6 +783,7 @@ adv_cols = [
     "Trend_Mensile",
     "Mesi_senza_miglioramento",
     "Da_Riassegnare",
+    "Da_Attenzionare",
     "Esito_Manageriale",
     "Azione_Consigliata",
     "Anomalia",
@@ -818,6 +842,7 @@ sintesi_per_referente = (
 )
 
 da_riassegnare_df = avanzamento_clienti[avanzamento_clienti["Da_Riassegnare"] == "Si"].copy()
+da_attenzionare_df = avanzamento_clienti[avanzamento_clienti["Da_Attenzionare"] == "Si"].copy()
 anomalie_df = avanzamento_clienti[avanzamento_clienti["Anomalia"] == "Si"].copy()
 
 output_cols = [
@@ -858,12 +883,13 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     sintesi_stato.to_excel(writer, sheet_name="Sintesi_Stato", index=False)
     sintesi_per_referente.to_excel(writer, sheet_name="Sintesi_Per_Referente", index=False)
     da_riassegnare_df.to_excel(writer, sheet_name="Da_Riassegnare", index=False)
+    da_attenzionare_df.to_excel(writer, sheet_name="Da_Attenzionare", index=False)
     anomalie_df.to_excel(writer, sheet_name="Anomalie", index=False)
 
     used = {
         "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
         "Sintesi_Avanzamento", "Sintesi_Stato", "Sintesi_Per_Referente",
-        "Da_Riassegnare", "Anomalie"
+        "Da_Riassegnare", "Da_Attenzionare", "Anomalie"
     }
 
     for tipo, df_t in final.groupby(final["Tipo"].fillna("Senza_Tipo"), dropna=False):
@@ -887,7 +913,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         if s not in (
             "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
             "Sintesi_Avanzamento", "Sintesi_Stato", "Sintesi_Per_Referente",
-            "Da_Riassegnare", "Anomalie"
+            "Da_Riassegnare", "Da_Attenzionare", "Anomalie"
         )
     ]
 
@@ -916,7 +942,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 fill = None
                 if trend in ("Avanza", "Riparte", "Deliberato"):
                     fill = GREEN
-                elif trend in ("Fermo", "Arretra"):
+                elif trend in ("Fermo", "Arretra", "Nessuna attività"):
                     fill = RED
                 elif trend in ("Stabile", "Da verificare"):
                     fill = YELLOW
@@ -933,12 +959,18 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 for c in range(1, ws.max_column + 1):
                     ws.cell(r, c).fill = RED
 
+    if "Da_Attenzionare" in wb.sheetnames:
+        ws = wb["Da_Attenzionare"]
+        for r in range(2, ws.max_row + 1):
+            for c in range(1, ws.max_column + 1):
+                ws.cell(r, c).fill = YELLOW
+
     admin_sheet = None
     for s in wb.sheetnames:
         if s not in (
             "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
             "Sintesi_Avanzamento", "Sintesi_Stato", "Sintesi_Per_Referente",
-            "Da_Riassegnare", "Anomalie"
+            "Da_Riassegnare", "Da_Attenzionare", "Anomalie"
         ) and "amministr" in s.lower():
             admin_sheet = s
             break

@@ -1,26 +1,26 @@
 /* ============================================
    app.js - Report Clienti
-   Versione completa con:
    - verifica singolo file
-   - lettura robusta header Excel
+   - errore reale mostrato in modal
    - report standard
-   - avanzamento SOLO amministratori
-   - sintesi avanzamento
-   - nessun log visibile
+   - avanzamento solo amministratori
 ============================================ */
 
 let pyodide = null;
 
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
-const btnRun  = document.getElementById("btnRun");
+const btnRun = document.getElementById("btnRun");
 
 const errModal = document.getElementById("errModal");
-const errOk    = document.getElementById("errOk");
-const okModal  = document.getElementById("okModal");
-const okOk     = document.getElementById("okOk");
-const okText   = document.getElementById("okText");
-const overlay  = document.getElementById("loadingOverlay");
+const errOk = document.getElementById("errOk");
+const errText = document.getElementById("errText");
+
+const okModal = document.getElementById("okModal");
+const okOk = document.getElementById("okOk");
+const okText = document.getElementById("okText");
+
+const overlay = document.getElementById("loadingOverlay");
 
 const state = {
   tabOk: false,
@@ -45,6 +45,13 @@ function showModal(modal) {
 function hideModal(modal) {
   if (!modal) return;
   modal.classList.add("hidden");
+}
+
+function showError(message) {
+  if (errText) {
+    errText.textContent = message || "Si è verificato un errore.";
+  }
+  showModal(errModal);
 }
 
 function updateRunEnabled() {
@@ -94,7 +101,7 @@ await micropip.install(["openpyxl", "python-dateutil"])
 init().catch((e) => {
   console.error(e);
   hideOverlay();
-  showModal(errModal);
+  showError("Errore inizializzazione: " + (e?.message || e));
 });
 
 async function onFileSelected(kind) {
@@ -216,7 +223,7 @@ best_kind
         state.sumBytes = null;
       }
       updateRunEnabled();
-      showModal(errModal);
+      showError("File non riconosciuto o struttura non valida.");
       return;
     }
 
@@ -247,7 +254,7 @@ best_kind
       state.sumBytes = null;
     }
     updateRunEnabled();
-    showModal(errModal);
+    showError("Errore verifica file: " + (e?.message || e));
   }
 }
 
@@ -294,32 +301,24 @@ def month_to_int(x):
             return v
     except:
         pass
-
     m = re.search(r"\\b(\\d{1,2})\\b", s)
     if m:
         v = int(m.group(1))
         if 1 <= v <= 12:
             return v
-
     mesi = {
-        "gen":1, "gennaio":1,
-        "feb":2, "febbraio":2,
-        "mar":3, "marzo":3,
-        "apr":4, "aprile":4,
-        "mag":5, "maggio":5,
-        "giu":6, "giugno":6,
-        "lug":7, "luglio":7,
-        "ago":8, "agosto":8,
+        "gen":1, "gennaio":1, "feb":2, "febbraio":2,
+        "mar":3, "marzo":3, "apr":4, "aprile":4,
+        "mag":5, "maggio":5, "giu":6, "giugno":6,
+        "lug":7, "luglio":7, "ago":8, "agosto":8,
         "set":9, "sett":9, "settembre":9,
-        "ott":10, "ottobre":10,
-        "nov":11, "novembre":11,
+        "ott":10, "ottobre":10, "nov":11, "novembre":11,
         "dic":12, "dicembre":12
     }
     low = s.lower()
     for k, v in mesi.items():
         if k in low:
             return v
-
     return np.nan
 
 priority_map = {"07":7, "06":6, "04":5, "03":4, "05":3, "01":2, "02":1}
@@ -374,21 +373,17 @@ def read_excel_robust(xlsx_bytes, expected_type):
 def pick_col(df, keys, fallback_idx=None):
     cols = list(df.columns)
     upmap = {str(c).strip().upper(): c for c in cols}
-
     for k in keys:
         ku = k.upper()
         if ku in upmap:
             return upmap[ku]
-
     for c in cols:
         cu = str(c).upper()
         for k in keys:
             if k.upper() in cu:
                 return c
-
     if fallback_idx is not None and df.shape[1] > fallback_idx:
         return df.columns[fallback_idx]
-
     return None
 
 def stage_label_from_code(code):
@@ -415,17 +410,11 @@ def extract_stage_code_safe(a):
         return m2.group(1)
     return ""
 
-# =========================================================
-# LETTURA FILE
-# =========================================================
-
+# lettura file
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
 
-# =========================================================
-# TAB CLIENTI
-# =========================================================
-
+# tab clienti
 c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
 c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
 c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
@@ -451,10 +440,7 @@ clients = pd.DataFrame({
     "INCASSATO_EUR": tab[c_inc] if c_inc else np.nan,
 })
 
-# =========================================================
-# SUM OF
-# =========================================================
-
+# sum_of
 s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
 s_mese = pick_col(su, ["MESE"], fallback_idx=1)
 s_att  = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=2)
@@ -478,10 +464,7 @@ sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
 
-# =========================================================
-# ULTIMA ATTIVITA'
-# =========================================================
-
+# ultima attività
 best_in_month = (
     sumdf.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
          .groupby(["ID_Soggetto", "Periodo"], as_index=False)
@@ -517,17 +500,11 @@ corrispondenza = (
 final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
-# =========================================================
-# SOLO AMMINISTRATORI
-# =========================================================
-
+# solo amministratori
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
 
-# =========================================================
-# AVANZAMENTO SOLO AMMINISTRATORI - FIX ROBUSTO
-# =========================================================
-
+# avanzamento solo amministratori
 today_period = date.today().year * 100 + date.today().month
 
 admins_base = admins_final[["ID_Soggetto", "Cliente", "Referente_Commerciale"]].copy()
@@ -553,7 +530,6 @@ mask_missing_code = adv_base["Stage_Code_Final"].eq("") & adv_base["Stage_Order_
 adv_base.loc[mask_missing_code, "Stage_Code_Final"] = adv_base.loc[mask_missing_code, "Prio"].map(prio_to_code).fillna("")
 adv_base["Stage_Name_Final"] = adv_base["Stage_Code_Final"].apply(stage_label_from_code)
 
-# Fix vero: aggancio agli stessi amministratori del foglio Amministratore
 adv_base = adv_base.merge(
     admins_base[["ID_Soggetto"]],
     on="ID_Soggetto",
@@ -692,10 +668,7 @@ sintesi_stato = (
     .sort_values("N_Clienti", ascending=False)
 )
 
-# =========================================================
-# OUTPUT STANDARD
-# =========================================================
-
+# output standard
 output_cols = [
     "Cliente",
     "Referente_Commerciale",
@@ -845,8 +818,8 @@ OUT_BYTES = out.read()
     hideOverlay();
 
   } catch (e) {
-    console.error(e);
+    console.error("Errore generazione report completo:", e);
     hideOverlay();
-    showModal(errModal);
+    showError("Errore generazione report: " + (e?.message || e));
   }
 }

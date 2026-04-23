@@ -1,8 +1,6 @@
 /* ============================================
    app.js - Report Clienti
-   Versione evoluta con:
-   - Da_Riassegnare più stretto
-   - Da_Attenzionare separato
+   Versione evoluta finale
 ============================================ */
 
 let pyodide = null;
@@ -936,34 +934,52 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         header = [c.value for c in ws[1]]
         try:
             col_trend = header.index("Trend_Mensile") + 1
+            col_dr = header.index("Da_Riassegnare") + 1
+            col_da = header.index("Da_Attenzionare") + 1
             max_col = ws.max_column
+
             for r in range(2, ws.max_row + 1):
                 trend = str(ws.cell(r, col_trend).value or "").strip()
+                dr = str(ws.cell(r, col_dr).value or "").strip()
+                da = str(ws.cell(r, col_da).value or "").strip()
+
                 fill = None
-                if trend in ("Avanza", "Riparte", "Deliberato"):
-                    fill = GREEN
-                elif trend in ("Fermo", "Arretra", "Nessuna attività"):
+
+                if dr == "Si":
                     fill = RED
-                elif trend in ("Stabile", "Da verificare"):
+                elif da == "Si":
                     fill = YELLOW
+                else:
+                    if trend in ("Avanza", "Riparte", "Deliberato"):
+                        fill = GREEN
+                    elif trend in ("Fermo", "Arretra", "Nessuna attività"):
+                        fill = RED
+                    elif trend in ("Stabile", "Da verificare"):
+                        fill = YELLOW
+
                 if fill:
                     for c in range(1, max_col + 1):
                         ws.cell(r, c).fill = fill
         except:
             pass
 
-    for special_sheet in ["Da_Riassegnare", "Anomalie"]:
-        if special_sheet in wb.sheetnames:
-            ws = wb[special_sheet]
-            for r in range(2, ws.max_row + 1):
-                for c in range(1, ws.max_column + 1):
-                    ws.cell(r, c).fill = RED
+    if "Da_Riassegnare" in wb.sheetnames:
+        ws = wb["Da_Riassegnare"]
+        for r in range(2, ws.max_row + 1):
+            for c in range(1, ws.max_column + 1):
+                ws.cell(r, c).fill = RED
 
     if "Da_Attenzionare" in wb.sheetnames:
         ws = wb["Da_Attenzionare"]
         for r in range(2, ws.max_row + 1):
             for c in range(1, ws.max_column + 1):
                 ws.cell(r, c).fill = YELLOW
+
+    if "Anomalie" in wb.sheetnames:
+        ws = wb["Anomalie"]
+        for r in range(2, ws.max_row + 1):
+            for c in range(1, ws.max_column + 1):
+                ws.cell(r, c).fill = RED
 
     admin_sheet = None
     for s in wb.sheetnames:

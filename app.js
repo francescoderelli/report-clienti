@@ -1,6 +1,11 @@
 /* ============================================
    app.js - Report Clienti
-   Versione completa con foglio iniziale regole RA
+   Versione completa con fogli nascosti
+   Visibili:
+   - 00_Regole_RA
+   - Avanzamento_Clienti
+   - Sintesi_Per_Referente
+   - Da_Riassegnare
 ============================================ */
 
 let pyodide = null;
@@ -892,6 +897,7 @@ header_overrides = {
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     regole_ra.to_excel(writer, sheet_name="00_Regole_RA", index=False)
+
     riepilogo = (
         final.assign(Tipo=final["Tipo"].fillna("Senza_Tipo"))
              .groupby("Tipo", dropna=False)
@@ -929,8 +935,15 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     wb = writer.book
 
+    # Apri il file sul foglio regole
     if "00_Regole_RA" in wb.sheetnames:
         wb.active = wb.sheetnames.index("00_Regole_RA")
+
+    # Nascondi tutti i fogli non desiderati
+    visible_sheets = {"00_Regole_RA", "Avanzamento_Clienti", "Sintesi_Per_Referente", "Da_Riassegnare"}
+    for ws in wb.worksheets:
+        if ws.title not in visible_sheets:
+            ws.sheet_state = "hidden"
 
     euro_format = u'€ #,##0.00'
     euro_cols = [9, 10, 11, 12]

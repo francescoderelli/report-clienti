@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Report Clienti</title>
+
+  <link rel="icon" href="favicon.ico" type="image/x-icon" />
+  <link rel="stylesheet" href="style.css" />
+
+  <script defer src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+
+<body>
+  <div id="loadingOverlay" class="overlay hidden">
+    <div class="overlayBox">
+      <div class="spinner"></div>
+      <div class="overlayText">Generazione report in corso...</div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brandLogo">A</div>
+        <div class="brandText">
+          <div class="brandName">Report Clienti</div>
+          <div class="brandSub">Upload &amp; Genera Excel</div>
+        </div>
+      </div>
+
+      <div class="sideCard">
+        <div class="sideTitle">Nota</div>
+        <div class="sideText">
+          I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="pageTitle">Report Clienti</div>
+          <div class="pageSubtitle">Carica i file da Albert e genera il report</div>
+        </div>
+      </header>
+
+      <section class="content">
+        <section class="panel">
+          <div class="panelHead solid">
+            <div class="panelTitle">Generatore Report</div>
+          </div>
+
+          <div class="panelBody">
+            <div class="formGrid">
+              <div class="field">
+                <label for="fileTabella">Tabella Clienti (.xlsx)</label>
+                <input id="fileTabella" type="file" accept=".xlsx" />
+                <div class="fileStatus hidden" id="statusTab">
+                  <span class="miniSpinner"></span>
+                  <span class="fileStatusText">Verifica in corso...</span>
+                </div>
+                <div class="hint">
+                  Scaricalo da <b>Dashboard commerciale</b> &gt;
+                  <b>Customers Summary / Riepilogo Clienti</b> &gt;
+                  seleziona la sede &gt; scarica
+                  <b>“Tabella Clienti (no filtro data)”</b>.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="fileSum">Sum_of (.xlsx)</label>
+                <input id="fileSum" type="file" accept=".xlsx" />
+                <div class="fileStatus hidden" id="statusSum">
+                  <span class="miniSpinner"></span>
+                  <span class="fileStatusText">Verifica in corso...</span>
+                </div>
+                <div class="hint">
+                  Scaricalo da <b>Dashboard commerciale</b> &gt;
+                  <b>By-Products / Sottoprodotti</b> &gt;
+                  seleziona sede &gt; seleziona anno <b>2025</b> e <b>2026</b> &gt;
+                  scarica il file dall’ultima tabella.
+                </div>
+              </div>
+
+              <div class="actions">
+                <button id="btnRun" class="primaryBtn" disabled>Genera report</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="errModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errTitle">
+    <div class="modalBox err">
+      <div class="modalIcon"></div>
+      <div id="errTitle" class="modalTitle">Errore</div>
+      <div class="modalText" id="errText">Carica il file corretto e riprova.</div>
+      <button id="errOk" class="modalBtn errBtn" type="button">OK</button>
+    </div>
+  </div>
+
+  <div id="okModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="okTitle">
+    <div class="modalBox ok">
+      <div class="modalIcon"></div>
+      <div id="okTitle" class="modalTitle">File OK</div>
+      <div class="modalText" id="okText">File verificato.</div>
+      <button id="okOk" class="modalBtn okBtn" type="button">OK</button>
+    </div>
+  </div>
+</body>
+</html>

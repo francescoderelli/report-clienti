@@ -8,6 +8,8 @@
    - fogli nascosti
    - avanzamento amministratori
    - preventivato, deliberato, n° preventivi emessi
+   - fix: se massimo storico = Delibera,
+          Mesi_senza_miglioramento = 0
 ============================================ */
 
 let pyodide = null;
@@ -430,10 +432,19 @@ def trend_mensile(v_old, v_m2, v_m1, v_cur):
         return "Arretra"
     return "Da verificare"
 
+# FIX IMPORTANTE:
+# se il massimo storico è Delibera, non ha senso far crescere
+# i mesi senza miglioramento, perché oltre delibera non si va.
 def mesi_senza_miglioramento(ranks):
+    vals = [int(x) for x in ranks if x is not None]
+    if not vals:
+        return 0
+    if max(vals) >= 7:
+        return 0
+
     best = 0
     months = 0
-    for r in ranks:
+    for r in vals:
         if r > best:
             best = r
             months = 0
@@ -644,7 +655,6 @@ sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
 
-# numero preventivi emessi per soggetto
 preventivi_count = (
     sumdf[sumdf["Prio"] == 6]
     .groupby("ID_Soggetto")
@@ -864,7 +874,7 @@ regole_ra = pd.DataFrame([
     ["PRIORITÀ ATTIVITÀ", "Se nello stesso mese ci sono più attività per lo stesso amministratore, viene considerata quella con priorità più alta."],
     ["ORDINE ATTIVITÀ", "Appuntamento < Telefonata < Sopralluogo < Incontro < Richiesta < Preventivo < Delibera."],
     ["TREND_MENSILE", "Confronta mese precedente e ultimo mese: Deliberato, Avanza, Riparte, Stabile, Fermo, Arretra, Nessuna attività, Da verificare."],
-    ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto nel periodo letto dal file."],
+    ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto. Se nello storico è presente Delibera, il valore viene posto a 0 perché oltre Delibera non si può migliorare."],
     ["DA_RIASSEGNARE = SI", "Scatta solo nei casi più critici: fermo, arretra, nessuna attività, anomalia rilevante o stagnazione molto lunga."],
     ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare: avanzamento debole, ripartenza fragile, stabilità troppo lunga o anomalia."],
     ["ESITO_MANAGERIALE", "Sintesi automatica del caso: Chiuso, Caldo, Positivo, Da monitorare, Debole, In lavorazione, Critico, Bloccato, Anomalo, Freddo."],
@@ -995,16 +1005,21 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         if ws.title not in visible_sheets:
             ws.sheet_state = "hidden"
 
-    # formati euro su foglio avanzamento
     if "Avanzamento_Clienti" in wb.sheetnames:
         ws = wb["Avanzamento_Clienti"]
         header = [c.value for c in ws[1]]
-        for col_name in ["PREVENTIVATO_EUR", "DELIBERATO_EUR"]:
-            if col_name in header:
-                idx = header.index(col_name) + 1
-                ws.cell(row=1, column=idx).value = "Preventivato €" if col_name == "PREVENTIVATO_EUR" else "Deliberato €"
-                for r in range(2, ws.max_row + 1):
-                    ws.cell(r, idx).number_format = u'€ #,##0.00'
+
+        if "PREVENTIVATO_EUR" in header:
+            idx = header.index("PREVENTIVATO_EUR") + 1
+            ws.cell(row=1, column=idx).value = "Preventivato €"
+            for r in range(2, ws.max_row + 1):
+                ws.cell(r, idx).number_format = u'€ #,##0.00'
+
+        if "DELIBERATO_EUR" in header:
+            idx = header.index("DELIBERATO_EUR") + 1
+            ws.cell(row=1, column=idx).value = "Deliberato €"
+            for r in range(2, ws.max_row + 1):
+                ws.cell(r, idx).number_format = u'€ #,##0.00'
 
     euro_format = u'€ #,##0.00'
     euro_cols = [9, 10, 11, 12]

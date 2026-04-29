@@ -1,6 +1,6 @@
 /* ============================================
    app.js - Report Clienti
-   Versione completa con:
+   Versione completa
    - verifica singolo file
    - stato verifica file con animazione
    - report excel
@@ -8,8 +8,8 @@
    - fogli nascosti
    - avanzamento amministratori
    - preventivato, deliberato, n° preventivi emessi
-   - fix: se massimo storico = Delibera,
-          Mesi_senza_miglioramento = 0
+   - fix delibera su mesi senza miglioramento
+   - famiglia stadio: Debole / Intermedio / Forte / Convertito
 ============================================ */
 
 let pyodide = null;
@@ -384,13 +384,13 @@ def activity_to_rank(v):
     if m:
         code = m.group(1)
         code_map = {
-            "01": 1,
-            "02": 2,
-            "03": 4,
-            "04": 5,
-            "05": 3,
-            "06": 6,
-            "07": 7,
+            "01": 1,   # appuntamento
+            "02": 2,   # telefonata
+            "03": 4,   # incontro
+            "04": 5,   # richiesta
+            "05": 3,   # sopralluogo
+            "06": 6,   # preventivo
+            "07": 7,   # delibera
         }
         return code_map.get(code, 0)
     low = s.lower()
@@ -409,6 +409,18 @@ def activity_to_rank(v):
     if "deliber" in low:
         return 7
     return 0
+
+def famiglia_stadio(v):
+    r = activity_to_rank(v)
+    if r in (1, 2, 4):   # Appuntamento, Telefonata, Incontro
+        return "Debole"
+    if r == 3:           # Sopralluogo
+        return "Intermedio"
+    if r in (5, 6):      # Richiesta, Preventivo
+        return "Forte"
+    if r == 7:           # Delibera
+        return "Convertito"
+    return ""
 
 def trend_mensile(v_old, v_m2, v_m1, v_cur):
     old_r = activity_to_rank(v_old)
@@ -432,9 +444,8 @@ def trend_mensile(v_old, v_m2, v_m1, v_cur):
         return "Arretra"
     return "Da verificare"
 
-# FIX IMPORTANTE:
-# se il massimo storico è Delibera, non ha senso far crescere
-# i mesi senza miglioramento, perché oltre delibera non si va.
+# Se nello storico è presente Delibera, non ha senso misurare
+# i mesi senza miglioramento: oltre Delibera non si va.
 def mesi_senza_miglioramento(ranks):
     vals = [int(x) for x in ranks if x is not None]
     if not vals:
@@ -456,6 +467,8 @@ def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, c
     if last_rank == 7:
         return "No"
 
+    fam = famiglia_stadio(cur_val)
+
     old_r = activity_to_rank(old_val)
     m2_r  = activity_to_rank(m2_val)
     m1_r  = activity_to_rank(m1_val)
@@ -464,30 +477,72 @@ def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, c
     if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
         return "Si"
 
-    if trend in ("Fermo", "Arretra", "Nessuna attività"):
-        return "Si"
+    if fam == "Debole":
+        if trend in ("Fermo", "Arretra", "Nessuna attività"):
+            return "Si"
+        if trend == "Stabile" and mesi_no_improve >= 2:
+            return "Si"
+        if mesi_no_improve >= 3:
+            return "Si"
+        return "No"
 
-    if anomalia == "Si" and last_rank >= 5:
-        return "Si"
+    if fam == "Intermedio":
+        if trend in ("Arretra", "Nessuna attività"):
+            return "Si"
+        if trend == "Fermo" and mesi_no_improve >= 2:
+            return "Si"
+        if mesi_no_improve >= 3:
+            return "Si"
+        return "No"
 
-    if last_rank in (1, 2) and mesi_no_improve >= 3:
-        return "Si"
-    if last_rank in (3, 4, 5) and mesi_no_improve >= 2:
-        return "Si"
-    if last_rank == 6 and mesi_no_improve >= 3:
-        return "Si"
+    if fam == "Forte":
+        if trend == "Arretra":
+            return "Si"
+        if trend == "Fermo" and mesi_no_improve >= 3:
+            return "Si"
+        if anomalia == "Si" and last_rank >= 5:
+            return "Si"
+        return "No"
 
     return "No"
 
-def da_attenzionare(last_rank, mesi_no_improve, trend, anomalia):
-    if trend in ("Avanza", "Riparte") and mesi_no_improve >= 2:
-        return "Si"
-    if trend == "Stabile" and mesi_no_improve >= 2:
-        return "Si"
-    if anomalia == "Si":
-        return "Si"
-    if last_rank > 0 and mesi_no_improve >= 2:
-        return "Si"
+def da_attenzionare(last_rank, mesi_no_improve, trend, anomalia, cur_val):
+    if last_rank == 7:
+        return "No"
+
+    fam = famiglia_stadio(cur_val)
+
+    if fam == "Debole":
+        if trend in ("Avanza", "Riparte") and mesi_no_improve >= 1:
+            return "Si"
+        if trend == "Stabile" and mesi_no_improve >= 1:
+            return "Si"
+        if anomalia == "Si":
+            return "Si"
+        return "No"
+
+    if fam == "Intermedio":
+        if trend in ("Avanza", "Riparte") and mesi_no_improve >= 1:
+            return "Si"
+        if trend == "Stabile" and mesi_no_improve >= 2:
+            return "Si"
+        if trend == "Fermo":
+            return "Si"
+        if anomalia == "Si":
+            return "Si"
+        return "No"
+
+    if fam == "Forte":
+        if trend in ("Avanza", "Riparte") and mesi_no_improve >= 2:
+            return "Si"
+        if trend == "Stabile" and mesi_no_improve >= 2:
+            return "Si"
+        if trend == "Fermo":
+            return "Si"
+        if anomalia == "Si":
+            return "Si"
+        return "No"
+
     return "No"
 
 def esito_manageriale(last_rank, trend, mesi_no_improve):
@@ -787,6 +842,7 @@ avanzamento_clienti["Trend_Mensile"] = avanzamento_clienti.apply(
 )
 
 avanzamento_clienti["Ultimo_Rank"] = avanzamento_clienti["Ultima attività"].apply(activity_to_rank)
+avanzamento_clienti["Famiglia_Stadio"] = avanzamento_clienti["Ultima attività"].apply(famiglia_stadio)
 avanzamento_clienti["Mesi_senza_miglioramento"] = avanzamento_clienti.apply(calc_mesi_no_improve_row, axis=1)
 avanzamento_clienti["Anomalia"] = avanzamento_clienti.apply(detect_anomalia, axis=1)
 
@@ -810,6 +866,7 @@ avanzamento_clienti["Da_Attenzionare"] = avanzamento_clienti.apply(
         int(r.get("Mesi_senza_miglioramento", 0) or 0),
         r.get("Trend_Mensile"),
         r.get("Anomalia"),
+        r.get("Ultima attività"),
     ),
     axis=1
 )
@@ -844,6 +901,7 @@ adv_cols = [
     "Ultima attività 2 mesi precedenti",
     "Ultima attività mese precedente",
     "Ultima attività",
+    "Famiglia_Stadio",
     "Trend_Mensile",
     "Mesi_senza_miglioramento",
     "Da_Riassegnare",
@@ -867,6 +925,7 @@ regole_ra = pd.DataFrame([
     ["PREVENTIVATO €", "Valore preventivato presente nella Tabella Clienti."],
     ["DELIBERATO €", "Valore deliberato presente nella Tabella Clienti."],
     ["N° PREVENTIVI EMESSI", "Conta quante attività classificate come Preventivo risultano nello storico Sum_of per il soggetto."],
+    ["FAMIGLIA_STADIO", "Debole = Appuntamento/Telefonata/Incontro. Intermedio = Sopralluogo. Forte = Richiesta/Preventivo. Convertito = Delibera."],
     ["ULTIMA ATTIVITÀ OLTRE 2 MESI PRECEDENTI", "Migliore attività trovata in tutti i mesi precedenti rispetto ai 2 mesi più recenti del file Sum_of."],
     ["ULTIMA ATTIVITÀ 2 MESI PRECEDENTI", "Migliore attività del mese pari a ultimo mese del file meno 2."],
     ["ULTIMA ATTIVITÀ MESE PRECEDENTE", "Migliore attività del mese pari a ultimo mese del file meno 1."],
@@ -875,8 +934,8 @@ regole_ra = pd.DataFrame([
     ["ORDINE ATTIVITÀ", "Appuntamento < Telefonata < Sopralluogo < Incontro < Richiesta < Preventivo < Delibera."],
     ["TREND_MENSILE", "Confronta mese precedente e ultimo mese: Deliberato, Avanza, Riparte, Stabile, Fermo, Arretra, Nessuna attività, Da verificare."],
     ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto. Se nello storico è presente Delibera, il valore viene posto a 0 perché oltre Delibera non si può migliorare."],
-    ["DA_RIASSEGNARE = SI", "Scatta solo nei casi più critici: fermo, arretra, nessuna attività, anomalia rilevante o stagnazione molto lunga."],
-    ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare: avanzamento debole, ripartenza fragile, stabilità troppo lunga o anomalia."],
+    ["DA_RIASSEGNARE = SI", "Sugli stadi deboli è più severo. Sugli stadi forti è più tollerante. Delibera non viene trattata come cliente da riassegnare solo perché non migliora."],
+    ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare, con logica diversa a seconda della famiglia dello stadio."],
     ["ESITO_MANAGERIALE", "Sintesi automatica del caso: Chiuso, Caldo, Positivo, Da monitorare, Debole, In lavorazione, Critico, Bloccato, Anomalo, Freddo."],
     ["AZIONE_CONSIGLIATA", "Suggerimento operativo automatico: monitorare, sostenere avanzamento, verificare blocco, controllo manuale, valutare riassegnazione, ecc."],
     ["ANOMALIA = SI", "Segnala casi incoerenti, per esempio regressioni sospette o ritorni a stadi inferiori dopo livelli più alti."],

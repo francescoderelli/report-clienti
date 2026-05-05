@@ -597,10 +597,10 @@ def da_attenzionare(last_rank, mesi_no_improve, trend, anomalia, cur_val):
     return "No"
 
 def esito_manageriale(last_rank, trend, mesi_no_improve):
-    if last_rank == 7:
-        return "Chiuso"
     if trend == "Dormiente":
         return "Da riattivare"
+    if last_rank == 7:
+        return "Chiuso"
     if trend == "Avanza" and last_rank >= 5:
         return "Caldo"
     if trend == "Avanza":
@@ -683,14 +683,20 @@ def stato_relazione(r):
     periodo_valore = prev_periodo + del_periodo
     periodo_attivo = periodo_valore > 0 or n_prev > 0 or n_del > 0
 
+    # Storico buono, ma nessun preventivo/delibera nel periodo:
+    # non è da leggere come convertito attuale, ma come cliente da riattivare.
+    if storico_valore > 0 and not periodo_attivo and trend in ("Dormiente", "Nessuna attività", "Fermo", "Da verificare"):
+        return "Cliente da riattivare"
+
     # Cliente che porta lavori nel periodo: non è solo pipeline, è relazione produttiva.
     if n_del >= 2:
         return "Fidelizzato"
-    if n_del == 1 or del_periodo > 0 or last_rank == 7:
+    if n_del == 1 or del_periodo > 0:
         return "Convertito"
 
-    # Storico buono, ma nessun preventivo/delibera nel periodo: non va letto come semplice rosso.
-    if storico_valore > 0 and not periodo_attivo and trend in ("Dormiente", "Nessuna attività", "Fermo", "Da verificare"):
+    # Se non ha delibere nel periodo ma lo stadio storico era Delibera,
+    # resta un cliente già convertito in passato, ma oggi va riattivato.
+    if last_rank == 7:
         return "Cliente da riattivare"
 
     if trend == "Dormiente":

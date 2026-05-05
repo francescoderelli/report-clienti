@@ -479,6 +479,12 @@ def trend_mensile(v_old, v_m2, v_m1, v_cur):
         return "Deliberato"
     if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
         return "Nessuna attività"
+
+    # Vecchia attività presente, ma nessun segnale commerciale recente.
+    # Prima questi casi finivano spesso in "Da verificare"; ora sono "Dormiente".
+    if cur_r == 0 and m1_r == 0 and (old_r > 0 or m2_r > 0):
+        return "Dormiente"
+
     if m1_r == 0 and cur_r > 0:
         return "Riparte"
     if m1_r > 0 and cur_r == 0:
@@ -628,6 +634,8 @@ def azione_consigliata(last_rank, trend, dr, da_att, anomalia):
         return "Monitorare"
     if trend == "Riparte":
         return "Sostenere avanzamento"
+    if trend == "Dormiente":
+        return "Riattivare"
     if trend == "Stabile" and last_rank <= 2:
         return "Sollecitare avanzamento"
     if trend == "Stabile":
@@ -640,6 +648,49 @@ def azione_consigliata(last_rank, trend, dr, da_att, anomalia):
         return "Controllo manuale"
     if trend == "Nessuna attività":
         return "Attivare contatto"
+    return "Da verificare"
+
+def stato_relazione(r):
+    trend = str(r.get("Trend_Mensile") or "").strip()
+    fam = str(r.get("Famiglia_Stadio") or "").strip()
+    last_rank = int(r.get("Ultimo_Rank", 0) or 0)
+
+    prev_storico = float(r.get("PREVENTIVATO_STORICO_EUR", 0) or 0)
+    del_storico = float(r.get("DELIBERATO_STORICO_EUR", 0) or 0)
+    prev_periodo = float(r.get("PREVENTIVATO_PERIODO_EUR", 0) or 0)
+    del_periodo = float(r.get("DELIBERATO_PERIODO_EUR", 0) or 0)
+    n_prev = int(r.get("N_PREVENTIVI_PERIODO", 0) or 0)
+    n_del = int(r.get("N_DELIBERE_PERIODO", 0) or 0)
+
+    storico_valore = prev_storico + del_storico
+    periodo_valore = prev_periodo + del_periodo
+    periodo_attivo = periodo_valore > 0 or n_prev > 0 or n_del > 0
+
+    # Cliente che porta lavori nel periodo: non è solo pipeline, è relazione produttiva.
+    if n_del >= 2:
+        return "Fidelizzato"
+    if n_del == 1 or del_periodo > 0 or last_rank == 7:
+        return "Convertito"
+
+    # Storico buono, ma nessun preventivo/delibera nel periodo: non va letto come semplice rosso.
+    if storico_valore > 0 and not periodo_attivo and trend in ("Dormiente", "Nessuna attività", "Fermo", "Da verificare"):
+        return "Cliente da riattivare"
+
+    if trend == "Dormiente":
+        return "Dormiente"
+
+    if prev_periodo > 0 or n_prev > 0 or fam == "Forte":
+        return "Caldo"
+
+    if fam in ("Debole", "Intermedio") and trend in ("Avanza", "Riparte", "Stabile"):
+        return "In sviluppo"
+
+    if trend == "Nessuna attività" and storico_valore <= 0:
+        return "Nuovo/Freddo"
+
+    if trend in ("Fermo", "Arretra"):
+        return "Critico"
+
     return "Da verificare"
 
 def find_header_row(xlsx_bytes, expected_type):
@@ -983,6 +1034,19 @@ avanzamento_clienti["Azione_Consigliata"] = avanzamento_clienti.apply(
     axis=1
 )
 
+avanzamento_clienti["Stato_Relazione"] = avanzamento_clienti.apply(stato_relazione, axis=1)
+
+# Cliente storico senza valore nel periodo: non lo butto in rosso secco,
+# lo porto a riattivazione/attenzione commerciale.
+mask_riattivare = avanzamento_clienti["Stato_Relazione"].eq("Cliente da riattivare")
+avanzamento_clienti.loc[mask_riattivare, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_riattivare, "Da_Attenzionare"] = "Si"
+avanzamento_clienti.loc[mask_riattivare, "Azione_Consigliata"] = "Riattivare cliente storico"
+
+mask_dormiente = avanzamento_clienti["Stato_Relazione"].eq("Dormiente") & avanzamento_clienti["Da_Riassegnare"].ne("Si")
+avanzamento_clienti.loc[mask_dormiente, "Da_Attenzionare"] = "Si"
+avanzamento_clienti.loc[mask_dormiente, "Azione_Consigliata"] = "Riattivare"
+
 adv_cols = [
     "Cliente",
     "Referente_Commerciale",
@@ -998,6 +1062,7 @@ adv_cols = [
     "Ultima attività",
     "Famiglia_Stadio",
     "Trend_Mensile",
+    "Stato_Relazione",
     "Mesi_senza_miglioramento",
     "Da_Riassegnare",
     "Da_Attenzionare",
@@ -1030,7 +1095,8 @@ regole_ra = pd.DataFrame([
     ["ULTIMA ATTIVITÀ", "Migliore attività dell’ultimo mese presente nel file Sum_of."],
     ["PRIORITÀ ATTIVITÀ", "Se nello stesso mese ci sono più attività per lo stesso amministratore, viene considerata quella con priorità più alta."],
     ["ORDINE ATTIVITÀ", "Appuntamento < Telefonata < Sopralluogo < Incontro < Richiesta < Preventivo < Delibera."],
-    ["TREND_MENSILE", "Confronta mese precedente e ultimo mese: Deliberato, Avanza, Riparte, Stabile, Fermo, Arretra, Nessuna attività, Da verificare."],
+    ["TREND_MENSILE", "Confronta mese precedente e ultimo mese: Deliberato, Avanza, Riparte, Stabile, Fermo, Dormiente, Arretra, Nessuna attività, Da verificare."],
+    ["STATO_RELAZIONE", "Classifica la qualità della relazione: Nuovo/Freddo, In sviluppo, Caldo, Convertito, Fidelizzato, Dormiente, Cliente da riattivare, Critico."],
     ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto. Se nello storico è presente Delibera, il valore viene posto a 0 perché oltre Delibera non si può migliorare."],
     ["DA_RIASSEGNARE = SI", "Sugli stadi deboli è più severo. Sugli stadi forti è più tollerante. Delibera non viene trattata come cliente da riassegnare solo perché non migliora."],
     ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare, con logica diversa a seconda della famiglia dello stadio."],
@@ -1048,9 +1114,10 @@ status_sort_map = {
     "Riparte": 3,
     "Stabile": 4,
     "Fermo": 5,
-    "Arretra": 6,
-    "Nessuna attività": 7,
-    "Da verificare": 8,
+    "Dormiente": 6,
+    "Arretra": 7,
+    "Nessuna attività": 8,
+    "Da verificare": 9,
 }
 
 avanzamento_clienti["_trend_sort"] = avanzamento_clienti["Trend_Mensile"].map(status_sort_map).fillna(99)
@@ -1242,7 +1309,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                         fill = GREEN
                     elif trend in ("Fermo", "Arretra", "Nessuna attività"):
                         fill = RED
-                    elif trend in ("Stabile", "Da verificare"):
+                    elif trend in ("Stabile", "Dormiente", "Da verificare"):
                         fill = YELLOW
 
                 if fill:

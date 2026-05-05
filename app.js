@@ -7,7 +7,10 @@
    - foglio iniziale regole RA
    - fogli nascosti
    - avanzamento amministratori
-   - preventivato, deliberato, n° preventivi emessi, n° delibere
+   - valori storici da Tabella Clienti
+   - valori periodo da Sum_of / Lordo€
+   - N° preventivi periodo da Sum_of / Numero
+   - N° delibere periodo deduplicate per CodicePratica
    - fix delibera su mesi senza miglioramento
    - famiglia stadio: Debole / Intermedio / Forte / Convertito
 ============================================ */
@@ -160,7 +163,7 @@ def score(cols):
         "PREVENTIVATO", "DELIBERATO", "FATTURATO", "INCASSATO"
     ]
     sum_must = {"ANNO", "MESE", "CODICESOGGETTO", "NOMESOGGETTO"}
-    sum_bonus = ["CLASSE ATTIV"]
+    sum_bonus = ["CLASSE ATTIV", "CODICEPRATICA", "LORDO"]
 
     cset = set(cols)
     tab_s = 0
@@ -303,6 +306,9 @@ from dateutil.relativedelta import relativedelta
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill, Font, Alignment
 
+# =========================
+# HELPERS
+# =========================
 def norm_id(x):
     if pd.isna(x):
         return ""
@@ -311,6 +317,45 @@ def norm_id(x):
     s = re.sub(r"\s+", "", s)
     s = re.sub(r"\.0$", "", s)
     return s
+
+def norm_key(x):
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    s = s.replace("\u00A0", "")
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"\.0$", "", s)
+    if s.lower() in ("nan", "none", "null"):
+        return ""
+    return s
+
+def parse_amount(x):
+    if pd.isna(x):
+        return 0.0
+    if isinstance(x, (int, float, np.integer, np.floating)):
+        return float(x)
+    s = str(x).strip()
+    s = s.replace("€", "").replace("\u00A0", "").replace(" ", "")
+    if s == "" or s.lower() in ("nan", "none", "null"):
+        return 0.0
+    # formato italiano: 1.234,56
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except:
+        return 0.0
+
+def parse_count(x):
+    if pd.isna(x):
+        return 1
+    try:
+        v = int(float(str(x).replace(",", ".")))
+        return max(v, 0)
+    except:
+        return 1
 
 def sanitize_sheet_name(name: str) -> str:
     name = "Senza_Tipo" if name is None or str(name).strip() == "" or str(name).lower() == "nan" else str(name).strip()
@@ -386,13 +431,13 @@ def activity_to_rank(v):
     if m:
         code = m.group(1)
         code_map = {
-            "01": 1,
-            "02": 2,
-            "03": 4,
-            "04": 5,
-            "05": 3,
-            "06": 6,
-            "07": 7,
+            "01": 1,   # appuntamento
+            "02": 2,   # telefonata
+            "03": 4,   # incontro
+            "04": 5,   # richiesta
+            "05": 3,   # sopralluogo
+            "06": 6,   # preventivo
+            "07": 7,   # delibera
         }
         return code_map.get(code, 0)
     low = s.lower()
@@ -652,9 +697,15 @@ def detect_anomalia(r):
         return "Si"
     return "No"
 
+# =========================
+# LETTURA FILE
+# =========================
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
 su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
 
+# =========================
+# TAB CLIENTI - valori storici
+# =========================
 c_id   = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
 c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
 c_cli  = pick_col(tab, ["CLIENTE"], fallback_idx=9)
@@ -674,50 +725,85 @@ clients = pd.DataFrame({
     "Referente_Commerciale": tab[c_ref] if c_ref is not None else np.nan,
     "Condomini_in_Albert": tab[c_ca] if c_ca is not None else np.nan,
     "Condomini_Amministrati": tab[c_cam] if c_cam is not None else np.nan,
-    "PREVENTIVATO_EUR": tab[c_prev] if c_prev is not None else np.nan,
-    "DELIBERATO_EUR": tab[c_del] if c_del is not None else np.nan,
-    "FATTURATO_EUR": tab[c_fat] if c_fat is not None else np.nan,
-    "INCASSATO_EUR": tab[c_inc] if c_inc is not None else np.nan,
+    "PREVENTIVATO_STORICO_EUR": tab[c_prev].apply(parse_amount) if c_prev is not None else 0,
+    "DELIBERATO_STORICO_EUR": tab[c_del].apply(parse_amount) if c_del is not None else 0,
+    "FATTURATO_EUR": tab[c_fat].apply(parse_amount) if c_fat is not None else 0,
+    "INCASSATO_EUR": tab[c_inc].apply(parse_amount) if c_inc is not None else 0,
 })
 clients["ID_Soggetto"] = clients["ID_Soggetto"].astype(str).str.strip()
 
-s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
-s_mese = pick_col(su, ["MESE"], fallback_idx=1)
-s_att  = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=2)
-s_chi  = pick_col(su, ["RESPONSABILE", "CHI"], fallback_idx=4)
-s_cod  = pick_col(su, ["CODICESOGGETTO", "CODICE SOGGETTO"], fallback_idx=6)
-s_nome = pick_col(su, ["NOMESOGGETTO", "NOME SOGGETTO"], fallback_idx=7)
+# =========================
+# SUM OF - attività + valori periodo
+# =========================
+s_anno    = pick_col(su, ["ANNO"], fallback_idx=0)
+s_mese    = pick_col(su, ["MESE"], fallback_idx=1)
+s_data    = pick_col(su, ["DATA"], fallback_idx=3)
+s_att     = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=4)
+s_chi     = pick_col(su, ["RESPONSABILE", "CHI"], fallback_idx=6)
+s_cod     = pick_col(su, ["CODICESOGGETTO", "CODICE SOGGETTO"], fallback_idx=8)
+s_nome    = pick_col(su, ["NOMESOGGETTO", "NOME SOGGETTO"], fallback_idx=9)
+s_pratica = pick_col(su, ["CODICEPRATICA", "CODICE PRATICA"], fallback_idx=10)
+s_numero  = pick_col(su, ["NUMERO"], fallback_idx=12)
+s_importo = pick_col(su, ["LORDO€", "LORDO", "IMPORTO", "SUM_OF_IMPORTO"], fallback_idx=13)
 
 sumdf = pd.DataFrame({
     "Anno": su[s_anno],
     "Mese": su[s_mese],
+    "Data": su[s_data] if s_data is not None else np.nan,
     "Attivita": su[s_att],
     "Chi": su[s_chi],
     "ID_Soggetto": su[s_cod].apply(norm_id),
     "Nome_Soggetto_Sum": su[s_nome],
+    "CodicePratica": su[s_pratica].apply(norm_key) if s_pratica is not None else "",
+    "Numero": su[s_numero].apply(parse_count) if s_numero is not None else 1,
+    "Importo_EUR": su[s_importo].apply(parse_amount) if s_importo is not None else 0,
 })
+
 sumdf["ID_Soggetto"] = sumdf["ID_Soggetto"].astype(str).str.strip()
 sumdf["Anno"] = pd.to_numeric(sumdf["Anno"], errors="coerce").astype("Int64")
 sumdf["Mese_num"] = sumdf["Mese"].apply(month_to_int).astype("Int64")
+sumdf["Data_dt"] = pd.to_datetime(sumdf["Data"], errors="coerce")
 sumdf["Prio"] = sumdf["Attivita"].apply(activity_priority).astype(int)
 sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
 
-preventivi_count = (
+# Preventivato periodo: somma Lordo€ delle righe 06 PREVENTIVI nel periodo caricato.
+# N° Preventivi periodo: somma della colonna Numero sulle righe 06 PREVENTIVI.
+preventivi_periodo = (
     sumdf[sumdf["Prio"] == 6]
-    .groupby("ID_Soggetto")
-    .size()
-    .reset_index(name="N_Preventivi_Emessi")
+    .groupby("ID_Soggetto", as_index=False)
+    .agg(
+        PREVENTIVATO_PERIODO_EUR=("Importo_EUR", "sum"),
+        N_PREVENTIVI_PERIODO=("Numero", "sum")
+    )
 )
 
-delibere_count = (
-    sumdf[sumdf["Prio"] == 7]
-    .groupby("ID_Soggetto")
-    .size()
-    .reset_index(name="N_Delibere")
-)
+# Deliberato periodo: deduplica per CodicePratica.
+# Se lo stesso CodicePratica è stato deliberato più volte, si prende la riga più recente.
+delibere_raw = sumdf[sumdf["Prio"] == 7].copy()
+if len(delibere_raw):
+    delibere_raw["_pratica_key"] = delibere_raw["CodicePratica"].apply(norm_key)
+    delibere_raw.loc[delibere_raw["_pratica_key"] == "", "_pratica_key"] = delibere_raw.loc[delibere_raw["_pratica_key"] == "", "_row"].apply(lambda x: f"NOCP_{x}")
+    delibere_latest = (
+        delibere_raw.sort_values(["ID_Soggetto", "_pratica_key", "Data_dt", "Periodo", "_row"])
+                    .groupby(["ID_Soggetto", "_pratica_key"], as_index=False)
+                    .tail(1)
+    )
+    delibere_periodo = (
+        delibere_latest
+        .groupby("ID_Soggetto", as_index=False)
+        .agg(
+            DELIBERATO_PERIODO_EUR=("Importo_EUR", "sum"),
+            N_DELIBERE_PERIODO=("_pratica_key", "nunique")
+        )
+    )
+else:
+    delibere_periodo = pd.DataFrame(columns=["ID_Soggetto", "DELIBERATO_PERIODO_EUR", "N_DELIBERE_PERIODO"])
 
+# =========================
+# ULTIME ATTIVITÀ
+# =========================
 best_in_month = (
     sumdf.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
          .groupby(["ID_Soggetto", "Periodo"], as_index=False)
@@ -753,21 +839,27 @@ corrispondenza = (
 final = clients.merge(last_act, on="ID_Soggetto", how="left").merge(name_map, on="ID_Soggetto", how="left")
 final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).fillna(final["ID_Soggetto"])
 
+# =========================
+# AMMINISTRATORI
+# =========================
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
 admins_base = admins_final[[
     "ID_Soggetto",
     "Cliente",
     "Referente_Commerciale",
-    "PREVENTIVATO_EUR",
-    "DELIBERATO_EUR"
+    "PREVENTIVATO_STORICO_EUR",
+    "DELIBERATO_STORICO_EUR"
 ]].copy()
 admins_base["ID_Soggetto"] = admins_base["ID_Soggetto"].astype(str).str.strip()
 
-admins_base = admins_base.merge(preventivi_count, on="ID_Soggetto", how="left")
-admins_base = admins_base.merge(delibere_count, on="ID_Soggetto", how="left")
-admins_base["N_Preventivi_Emessi"] = admins_base["N_Preventivi_Emessi"].fillna(0).astype(int)
-admins_base["N_Delibere"] = admins_base["N_Delibere"].fillna(0).astype(int)
+admins_base = admins_base.merge(preventivi_periodo, on="ID_Soggetto", how="left")
+admins_base = admins_base.merge(delibere_periodo, on="ID_Soggetto", how="left")
+
+for c in ["PREVENTIVATO_PERIODO_EUR", "DELIBERATO_PERIODO_EUR"]:
+    admins_base[c] = admins_base[c].fillna(0)
+for c in ["N_PREVENTIVI_PERIODO", "N_DELIBERE_PERIODO"]:
+    admins_base[c] = admins_base[c].fillna(0).astype(int)
 
 max_period = int(best_in_month["Periodo"].max()) if len(best_in_month) else None
 
@@ -894,10 +986,12 @@ avanzamento_clienti["Azione_Consigliata"] = avanzamento_clienti.apply(
 adv_cols = [
     "Cliente",
     "Referente_Commerciale",
-    "PREVENTIVATO_EUR",
-    "DELIBERATO_EUR",
-    "N_Preventivi_Emessi",
-    "N_Delibere",
+    "PREVENTIVATO_STORICO_EUR",
+    "DELIBERATO_STORICO_EUR",
+    "PREVENTIVATO_PERIODO_EUR",
+    "DELIBERATO_PERIODO_EUR",
+    "N_PREVENTIVI_PERIODO",
+    "N_DELIBERE_PERIODO",
     "Ultima attività oltre 2 mesi precedenti",
     "Ultima attività 2 mesi precedenti",
     "Ultima attività mese precedente",
@@ -922,11 +1016,13 @@ avanzamento_clienti = avanzamento_clienti[adv_cols].copy()
 regole_ra = pd.DataFrame([
     ["SCOPO DEL FILE", "Supportare il monitoraggio commerciale degli amministratori e aiutare il RA a distinguere casi sani, casi da attenzionare e casi da riassegnare."],
     ["FOGLIO PRINCIPALE", "Il foglio principale è questo: 00_Regole_RA. Serve per spiegare le regole a chi riceve il file."],
-    ["FOGLIO AVANZAMENTO_CLIENTI", "Contiene una riga per ogni amministratore con il confronto tra attività nei diversi blocchi temporali, il valore economico e le valutazioni automatiche."],
-    ["PREVENTIVATO €", "Valore preventivato presente nella Tabella Clienti."],
-    ["DELIBERATO €", "Valore deliberato presente nella Tabella Clienti."],
-    ["N° PREVENTIVI", "Conta quante attività classificate come Preventivo risultano nello storico Sum_of per il soggetto."],
-    ["N° DELIBERE", "Conta quante attività classificate come Delibera risultano nello storico Sum_of per il soggetto."],
+    ["FOGLIO AVANZAMENTO_CLIENTI", "Contiene una riga per ogni amministratore con valore storico, valore del periodo caricato, movimento commerciale e valutazioni automatiche."],
+    ["PREVENTIVATO STORICO €", "Valore preventivato complessivo preso dalla Tabella Clienti."],
+    ["DELIBERATO STORICO €", "Valore deliberato complessivo preso dalla Tabella Clienti."],
+    ["PREVENTIVATO PERIODO €", "Somma del Lordo€ nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
+    ["DELIBERATO PERIODO €", "Somma del Lordo€ nel Sum_of per le righe 07 DELIBERE del periodo caricato, deduplicate per CodicePratica prendendo la riga più recente."],
+    ["N° PREVENTIVI PERIODO", "Somma della colonna Numero nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
+    ["N° DELIBERE PERIODO", "Conta le pratiche deliberate uniche nel periodo. Se lo stesso CodicePratica compare più volte come delibera, conta una sola volta e prende il valore più recente."],
     ["FAMIGLIA_STADIO", "Debole = Appuntamento/Telefonata/Incontro. Intermedio = Sopralluogo. Forte = Richiesta/Preventivo. Convertito = Delibera."],
     ["ULTIMA ATTIVITÀ OLTRE 2 MESI PRECEDENTI", "Migliore attività trovata in tutti i mesi precedenti rispetto ai 2 mesi più recenti del file Sum_of."],
     ["ULTIMA ATTIVITÀ 2 MESI PRECEDENTI", "Migliore attività del mese pari a ultimo mese del file meno 2."],
@@ -1004,19 +1100,22 @@ output_cols = [
     "Mese_Ultima_Attivita",
     "Ultima_Attivita",
     "Ultima_Attivita_Fatta_Da",
-    "PREVENTIVATO_EUR",
-    "DELIBERATO_EUR",
+    "PREVENTIVATO_STORICO_EUR",
+    "DELIBERATO_STORICO_EUR",
     "FATTURATO_EUR",
     "INCASSATO_EUR"
 ]
 
 header_overrides = {
-    "PREVENTIVATO_EUR": "Preventivato €",
-    "DELIBERATO_EUR": "Deliberato €",
+    "PREVENTIVATO_STORICO_EUR": "Preventivato Storico €",
+    "DELIBERATO_STORICO_EUR": "Deliberato Storico €",
     "FATTURATO_EUR": "Fatturato €",
     "INCASSATO_EUR": "Incassato €"
 }
 
+# =========================
+# SCRITTURA EXCEL
+# =========================
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     regole_ra.to_excel(writer, sheet_name="00_Regole_RA", index=False)
@@ -1066,30 +1165,31 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         if ws.title not in visible_sheets:
             ws.sheet_state = "hidden"
 
-    if "Avanzamento_Clienti" in wb.sheetnames:
-        ws = wb["Avanzamento_Clienti"]
+    def format_avanzamento_like_sheet(sheet_name):
+        if sheet_name not in wb.sheetnames:
+            return
+        ws = wb[sheet_name]
         header = [c.value for c in ws[1]]
 
-        if "PREVENTIVATO_EUR" in header:
-            idx = header.index("PREVENTIVATO_EUR") + 1
-            ws.cell(row=1, column=idx).value = "Preventivato €"
-            for r in range(2, ws.max_row + 1):
-                ws.cell(r, idx).number_format = u'€ #,##0.00'
+        rename_map = {
+            "PREVENTIVATO_STORICO_EUR": "Preventivato Storico €",
+            "DELIBERATO_STORICO_EUR": "Deliberato Storico €",
+            "PREVENTIVATO_PERIODO_EUR": "Preventivato Periodo €",
+            "DELIBERATO_PERIODO_EUR": "Deliberato Periodo €",
+            "N_PREVENTIVI_PERIODO": "N° Preventivi Periodo",
+            "N_DELIBERE_PERIODO": "N° Delibere Periodo",
+        }
 
-        if "DELIBERATO_EUR" in header:
-            idx = header.index("DELIBERATO_EUR") + 1
-            ws.cell(row=1, column=idx).value = "Deliberato €"
-            for r in range(2, ws.max_row + 1):
-                ws.cell(r, idx).number_format = u'€ #,##0.00'
+        for raw, pretty in rename_map.items():
+            if raw in header:
+                idx = header.index(raw) + 1
+                ws.cell(row=1, column=idx).value = pretty
+                if "EUR" in raw:
+                    for r in range(2, ws.max_row + 1):
+                        ws.cell(r, idx).number_format = u'€ #,##0.00'
 
-        header = [c.value for c in ws[1]]
-        if "N_Preventivi_Emessi" in header:
-            idx = header.index("N_Preventivi_Emessi") + 1
-            ws.cell(row=1, column=idx).value = "N° Preventivi"
-
-        if "N_Delibere" in header:
-            idx = header.index("N_Delibere") + 1
-            ws.cell(row=1, column=idx).value = "N° Delibere"
+    for sname in ["Avanzamento_Clienti", "Da_Riassegnare", "Da_Attenzionare", "Anomalie"]:
+        format_avanzamento_like_sheet(sname)
 
     euro_format = u'€ #,##0.00'
     euro_cols = [9, 10, 11, 12]

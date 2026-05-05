@@ -1079,10 +1079,47 @@ avanzamento_clienti.loc[mask_freddo, "Da_Attenzionare"] = "No"
 avanzamento_clienti.loc[mask_freddo, "Azione_Consigliata"] = "Attivare prospect"
 
 # Un cliente convertito/fidelizzato non va riassegnato automaticamente:
-# prima va presidiato o controllato manualmente.
+# prima va presidiato o consolidato.
 mask_valore_relazione = avanzamento_clienti["Stato_Relazione"].isin(["Convertito", "Fidelizzato"])
 avanzamento_clienti.loc[mask_valore_relazione, "Da_Riassegnare"] = "No"
 avanzamento_clienti.loc[mask_valore_relazione & avanzamento_clienti["Da_Attenzionare"].eq("Si"), "Azione_Consigliata"] = "Presidiare relazione"
+
+# Micro-fix finale: Esito_Manageriale deve essere coerente con Stato_Relazione.
+# Evita casi tipo Fidelizzato/Convertito che finiscono ancora in "Da verificare".
+mask_fidelizzato = avanzamento_clienti["Stato_Relazione"].eq("Fidelizzato")
+avanzamento_clienti.loc[mask_fidelizzato, "Esito_Manageriale"] = "Fidelizzato"
+avanzamento_clienti.loc[mask_fidelizzato, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_fidelizzato, "Azione_Consigliata"] = "Presidiare relazione"
+
+mask_convertito = avanzamento_clienti["Stato_Relazione"].eq("Convertito")
+avanzamento_clienti.loc[mask_convertito, "Esito_Manageriale"] = "Convertito"
+avanzamento_clienti.loc[mask_convertito, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_convertito & avanzamento_clienti["Azione_Consigliata"].isin(["Da verificare", "Attenzionare", "Valutare riassegnazione"]), "Azione_Consigliata"] = "Consolidare relazione"
+
+mask_riattivare_final = avanzamento_clienti["Stato_Relazione"].eq("Cliente da riattivare")
+avanzamento_clienti.loc[mask_riattivare_final, "Esito_Manageriale"] = "Da riattivare"
+avanzamento_clienti.loc[mask_riattivare_final, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_riattivare_final, "Da_Attenzionare"] = "Si"
+avanzamento_clienti.loc[mask_riattivare_final, "Azione_Consigliata"] = "Riattivare cliente storico"
+
+mask_dormiente_final = avanzamento_clienti["Stato_Relazione"].eq("Dormiente")
+avanzamento_clienti.loc[mask_dormiente_final, "Esito_Manageriale"] = "Dormiente"
+avanzamento_clienti.loc[mask_dormiente_final & avanzamento_clienti["Azione_Consigliata"].isin(["Da verificare", "Attenzionare"]), "Azione_Consigliata"] = "Riattivare"
+
+mask_nuovo_freddo_final = avanzamento_clienti["Stato_Relazione"].eq("Nuovo/Freddo")
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Esito_Manageriale"] = "Da attivare"
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Da_Attenzionare"] = "No"
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Azione_Consigliata"] = "Attivare prospect"
+
+mask_caldo_final = avanzamento_clienti["Stato_Relazione"].eq("Caldo")
+avanzamento_clienti.loc[mask_caldo_final & avanzamento_clienti["Esito_Manageriale"].eq("Da verificare"), "Esito_Manageriale"] = "Caldo"
+
+mask_sviluppo_final = avanzamento_clienti["Stato_Relazione"].eq("In sviluppo")
+avanzamento_clienti.loc[mask_sviluppo_final & avanzamento_clienti["Esito_Manageriale"].eq("Da verificare"), "Esito_Manageriale"] = "In sviluppo"
+
+mask_critico_final = avanzamento_clienti["Stato_Relazione"].eq("Critico")
+avanzamento_clienti.loc[mask_critico_final, "Esito_Manageriale"] = "Critico"
 
 adv_cols = [
     "Cliente",
@@ -1139,7 +1176,7 @@ regole_ra = pd.DataFrame([
     ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto. Se nello storico è presente Delibera, il valore viene posto a 0 perché oltre Delibera non si può migliorare."],
     ["DA_RIASSEGNARE = SI", "Sugli stadi deboli è più severo. Sugli stadi forti è più tollerante. Delibera non viene trattata come cliente da riassegnare solo perché non migliora."],
     ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare, con logica diversa a seconda della famiglia dello stadio."],
-    ["ESITO_MANAGERIALE", "Sintesi automatica del caso: Chiuso, Caldo, Positivo, Da monitorare, Debole, In lavorazione, Critico, Bloccato, Anomalo, Freddo."],
+    ["ESITO_MANAGERIALE", "Sintesi automatica del caso, ora allineata anche allo Stato_Relazione: Fidelizzato, Convertito, Da riattivare, Dormiente, Da attivare, Caldo, In sviluppo, Critico, oltre agli stati operativi come Chiuso, Positivo, Da monitorare, Bloccato, Anomalo."],
     ["AZIONE_CONSIGLIATA", "Suggerimento operativo automatico: monitorare, sostenere avanzamento, verificare blocco, controllo manuale, valutare riassegnazione, ecc."],
     ["ANOMALIA = SI", "Segnala casi incoerenti, per esempio regressioni sospette o ritorni a stadi inferiori dopo livelli più alti."],
     ["FOGLIO DA_RIASSEGNARE", "Contiene solo i casi più critici che meritano valutazione di riassegnazione."],

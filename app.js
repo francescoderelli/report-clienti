@@ -653,12 +653,13 @@ def azione_consigliata(last_rank, trend, dr, da_att, anomalia):
     return "Da verificare"
 
 def stadio_riferimento(r):
-    # Se l'ultimo mese è vuoto, usa l'ultima attività reale nel periodo.
-    # Così un cliente che ha deliberato/preventivato nel periodo, ma non nell'ultimo mese,
-    # resta classificato correttamente.
+    # Lo Stadio_Riferimento NON è necessariamente l'ultima attività cronologica.
+    # Prima usa la migliore attività raggiunta nel periodo; poi, se non c'è,
+    # ripiega sull'ultima attività reale e infine sullo storico precedente.
     for col in [
-        "Ultima attività",
+        "Migliore attività nel periodo",
         "Ultima attività nel periodo",
+        "Ultima attività",
         "Ultima attività mese precedente",
         "Ultima attività 2 mesi precedenti",
         "Ultima attività oltre 2 mesi precedenti",
@@ -900,12 +901,50 @@ last_act.rename(columns={
 }, inplace=True)
 
 # Ultima attività reale nel periodo caricato.
-# Questa è diversa da "Ultima attività" del foglio Avanzamento_Clienti,
-# che rappresenta solo l'attività nell'ultimo mese presente nel file.
-last_period_act = best_last[["ID_Soggetto", "Attivita"]].copy()
+# Qui NON prendiamo lo stadio più alto: prendiamo l'ultima attività cronologica
+# e la persona che l'ha fatta, qualsiasi attività sia: telefonata, incontro,
+# richiesta, preventivo o delibera.
+sumdf["_DataSort"] = sumdf["Data_dt"].fillna(pd.Timestamp("1900-01-01"))
+
+last_period_act = (
+    sumdf.sort_values(["ID_Soggetto", "_DataSort", "Periodo", "_row"])
+         .groupby("ID_Soggetto", as_index=False)
+         .tail(1)[["ID_Soggetto", "Attivita", "Chi"]]
+         .copy()
+)
 last_period_act.rename(columns={
-    "Attivita": "Ultima attività nel periodo"
+    "Attivita": "Ultima attività nel periodo",
+    "Chi": "Ultima attività fatta da"
 }, inplace=True)
+
+# Migliore attività nel periodo: serve per lo Stadio_Riferimento.
+# Esempio: se il cliente ha fatto una delibera e poi una telefonata,
+# l'ultima attività è telefonata, ma lo stadio raggiunto resta delibera.
+best_period_stage = (
+    sumdf.sort_values(["ID_Soggetto", "Prio", "_DataSort", "Periodo", "_row"])
+         .groupby("ID_Soggetto", as_index=False)
+         .tail(1)[["ID_Soggetto", "Attivita"]]
+         .copy()
+)
+best_period_stage.rename(columns={
+    "Attivita": "Migliore attività nel periodo"
+}, inplace=True)
+
+# Ultima delibera nel periodo e chi l'ha fatta.
+ultima_delibera_periodo = sumdf[sumdf["Prio"] == 7].copy()
+if len(ultima_delibera_periodo):
+    ultima_delibera_periodo = (
+        ultima_delibera_periodo.sort_values(["ID_Soggetto", "_DataSort", "Periodo", "_row"])
+        .groupby("ID_Soggetto", as_index=False)
+        .tail(1)[["ID_Soggetto", "Attivita", "Chi"]]
+        .copy()
+    )
+    ultima_delibera_periodo.rename(columns={
+        "Attivita": "Ultima delibera nel periodo",
+        "Chi": "Ultima delibera fatta da"
+    }, inplace=True)
+else:
+    ultima_delibera_periodo = pd.DataFrame(columns=["ID_Soggetto", "Ultima delibera nel periodo", "Ultima delibera fatta da"])
 
 name_map = (
     sumdf[["ID_Soggetto", "Nome_Soggetto_Sum"]]
@@ -963,7 +1002,7 @@ admin_months = best_in_month.merge(
 ).copy()
 
 cur_df = admin_months[admin_months["Periodo"] == max_period][["ID_Soggetto", "Attivita", "Chi", "Prio"]].copy() if max_period is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita","Chi","Prio"])
-cur_df.rename(columns={"Attivita":"Ultima attività", "Chi":"Ultima_Attivita_Fatta_Da", "Prio":"Prio_cur"}, inplace=True)
+cur_df.rename(columns={"Attivita":"Ultima attività", "Chi":"Attività ultimo mese fatta da", "Prio":"Prio_cur"}, inplace=True)
 
 m1_df = admin_months[admin_months["Periodo"] == prev1][["ID_Soggetto", "Attivita", "Prio"]].copy() if prev1 is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita","Prio"])
 m1_df.rename(columns={"Attivita":"Ultima attività mese precedente", "Prio":"Prio_m1"}, inplace=True)
@@ -996,6 +1035,8 @@ avanzamento_clienti = avanzamento_clienti.merge(m2_df, on="ID_Soggetto", how="le
 avanzamento_clienti = avanzamento_clienti.merge(m1_df, on="ID_Soggetto", how="left")
 avanzamento_clienti = avanzamento_clienti.merge(cur_df, on="ID_Soggetto", how="left")
 avanzamento_clienti = avanzamento_clienti.merge(last_period_act, on="ID_Soggetto", how="left")
+avanzamento_clienti = avanzamento_clienti.merge(ultima_delibera_periodo, on="ID_Soggetto", how="left")
+avanzamento_clienti = avanzamento_clienti.merge(best_period_stage, on="ID_Soggetto", how="left")
 avanzamento_clienti = avanzamento_clienti.merge(hist_wide, on="ID_Soggetto", how="left")
 
 hist_cols = [c for c in avanzamento_clienti.columns if c.startswith("P_")]
@@ -1144,7 +1185,12 @@ adv_cols = [
     "Ultima attività 2 mesi precedenti",
     "Ultima attività mese precedente",
     "Ultima attività",
+    "Attività ultimo mese fatta da",
     "Ultima attività nel periodo",
+    "Ultima attività fatta da",
+    "Ultima delibera nel periodo",
+    "Ultima delibera fatta da",
+    "Migliore attività nel periodo",
     "Stadio_Riferimento",
     "Famiglia_Stadio",
     "Trend_Mensile",
@@ -1155,7 +1201,6 @@ adv_cols = [
     "Esito_Manageriale",
     "Azione_Consigliata",
     "Anomalia",
-    "Ultima_Attivita_Fatta_Da",
 ]
 
 for col in adv_cols:
@@ -1174,13 +1219,18 @@ regole_ra = pd.DataFrame([
     ["DELIBERATO PERIODO €", "Somma del Lordo€ nel Sum_of per le righe 07 DELIBERE del periodo caricato, deduplicate per CodicePratica prendendo la riga più recente."],
     ["N° PREVENTIVI PERIODO", "Somma della colonna Numero nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
     ["N° DELIBERE PERIODO", "Conta le pratiche deliberate uniche nel periodo. Se lo stesso CodicePratica compare più volte come delibera, conta una sola volta e prende il valore più recente."],
-    ["STADIO_RIFERIMENTO", "Se l’ultimo mese non ha attività, prende la vera ultima attività nel periodo o l’ultimo stadio conosciuto nello storico. Serve per capire se il cliente è dormiente su Telefonata, Richiesta, Preventivo o Delibera."],
+    ["STADIO_RIFERIMENTO", "Rappresenta lo stadio commerciale più utile raggiunto: usa prima la Migliore attività nel periodo, poi la vera ultima attività nel periodo e infine lo storico precedente. Serve per non perdere una delibera solo perché dopo è stata fatta una telefonata."],
     ["FAMIGLIA_STADIO", "Calcolata sullo Stadio_Riferimento. Debole = Appuntamento/Telefonata/Incontro. Intermedio = Sopralluogo. Forte = Richiesta/Preventivo. Convertito = Delibera."],
     ["ULTIMA ATTIVITÀ OLTRE 2 MESI PRECEDENTI", "Migliore attività trovata in tutti i mesi precedenti rispetto ai 2 mesi più recenti del file Sum_of."],
     ["ULTIMA ATTIVITÀ 2 MESI PRECEDENTI", "Migliore attività del mese pari a ultimo mese del file meno 2."],
     ["ULTIMA ATTIVITÀ MESE PRECEDENTE", "Migliore attività del mese pari a ultimo mese del file meno 1."],
-    ["ATTIVITÀ ULTIMO MESE", "Nel foglio Avanzamento_Clienti la colonna visualizzata come Attività ultimo mese indica la migliore attività svolta nell’ultimo mese presente nel file Sum_of."],
-    ["ULTIMA ATTIVITÀ NEL PERIODO", "Indica la vera ultima attività rilevata per il cliente nel periodo caricato, anche se non è avvenuta nell’ultimo mese del file."],
+    ["ATTIVITÀ ULTIMO MESE", "Indica la migliore attività svolta nell’ultimo mese presente nel file Sum_of."],
+    ["ATTIVITÀ ULTIMO MESE FATTA DA", "Indica chi ha fatto l’attività dell’ultimo mese, se presente."],
+    ["ULTIMA ATTIVITÀ NEL PERIODO", "Indica la vera ultima attività cronologica rilevata per il cliente nel periodo caricato, anche se non è avvenuta nell’ultimo mese del file."],
+    ["ULTIMA ATTIVITÀ FATTA DA", "Indica chi ha fatto la vera ultima attività cronologica nel periodo caricato."],
+    ["ULTIMA DELIBERA NEL PERIODO", "Indica l’ultima delibera cronologica del cliente nel periodo caricato, se presente."],
+    ["ULTIMA DELIBERA FATTA DA", "Indica chi ha fatto l’ultima delibera nel periodo caricato."],
+    ["MIGLIORE ATTIVITÀ NEL PERIODO", "Indica lo stadio più alto raggiunto nel periodo secondo la priorità: Delibera, Preventivo, Richiesta, Incontro, Sopralluogo, Telefonata, Appuntamento."],
     ["PRIORITÀ ATTIVITÀ", "Se nello stesso mese ci sono più attività per lo stesso amministratore, viene considerata quella con priorità più alta."],
     ["ORDINE ATTIVITÀ", "Appuntamento < Telefonata < Sopralluogo < Incontro < Richiesta < Preventivo < Delibera."],
     ["TREND_MENSILE", "Confronta mese precedente e ultimo mese: Deliberato, Avanza, Riparte, Stabile, Fermo, Dormiente, Arretra, Nessuna attività, Da verificare."],

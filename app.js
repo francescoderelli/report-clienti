@@ -930,21 +930,29 @@ best_period_stage.rename(columns={
     "Attivita": "Migliore attività nel periodo"
 }, inplace=True)
 
-# Ultima delibera nel periodo e chi l'ha fatta.
+# Ultima delibera nel periodo: informazioni operative utili.
+# Non mostriamo più una colonna con scritto solo "07 DELIBERE":
+# mostriamo chi l'ha fatta, il codice pratica e la data dell'ultima delibera.
 ultima_delibera_periodo = sumdf[sumdf["Prio"] == 7].copy()
 if len(ultima_delibera_periodo):
     ultima_delibera_periodo = (
         ultima_delibera_periodo.sort_values(["ID_Soggetto", "_DataSort", "Periodo", "_row"])
         .groupby("ID_Soggetto", as_index=False)
-        .tail(1)[["ID_Soggetto", "Attivita", "Chi"]]
+        .tail(1)[["ID_Soggetto", "Chi", "CodicePratica", "Data_dt"]]
         .copy()
     )
     ultima_delibera_periodo.rename(columns={
-        "Attivita": "Ultima delibera nel periodo",
-        "Chi": "Ultima delibera fatta da"
+        "Chi": "Ultima delibera fatta da",
+        "CodicePratica": "Codice pratica ultima delibera",
+        "Data_dt": "Data ultima delibera"
     }, inplace=True)
 else:
-    ultima_delibera_periodo = pd.DataFrame(columns=["ID_Soggetto", "Ultima delibera nel periodo", "Ultima delibera fatta da"])
+    ultima_delibera_periodo = pd.DataFrame(columns=[
+        "ID_Soggetto",
+        "Ultima delibera fatta da",
+        "Codice pratica ultima delibera",
+        "Data ultima delibera"
+    ])
 
 name_map = (
     sumdf[["ID_Soggetto", "Nome_Soggetto_Sum"]]
@@ -1188,8 +1196,9 @@ adv_cols = [
     "Attività ultimo mese fatta da",
     "Ultima attività nel periodo",
     "Ultima attività fatta da",
-    "Ultima delibera nel periodo",
     "Ultima delibera fatta da",
+    "Codice pratica ultima delibera",
+    "Data ultima delibera",
     "Migliore attività nel periodo",
     "Stadio_Riferimento",
     "Famiglia_Stadio",
@@ -1228,8 +1237,9 @@ regole_ra = pd.DataFrame([
     ["ATTIVITÀ ULTIMO MESE FATTA DA", "Indica chi ha fatto l’attività dell’ultimo mese, se presente."],
     ["ULTIMA ATTIVITÀ NEL PERIODO", "Indica la vera ultima attività cronologica rilevata per il cliente nel periodo caricato, anche se non è avvenuta nell’ultimo mese del file."],
     ["ULTIMA ATTIVITÀ FATTA DA", "Indica chi ha fatto la vera ultima attività cronologica nel periodo caricato."],
-    ["ULTIMA DELIBERA NEL PERIODO", "Indica l’ultima delibera cronologica del cliente nel periodo caricato, se presente."],
     ["ULTIMA DELIBERA FATTA DA", "Indica chi ha fatto l’ultima delibera nel periodo caricato."],
+    ["CODICE PRATICA ULTIMA DELIBERA", "Indica il CodicePratica associato all’ultima delibera cronologica del cliente nel periodo caricato."],
+    ["DATA ULTIMA DELIBERA", "Indica la data dell’ultima delibera cronologica del cliente nel periodo caricato, se presente nel Sum_of."],
     ["MIGLIORE ATTIVITÀ NEL PERIODO", "Indica lo stadio più alto raggiunto nel periodo secondo la priorità: Delibera, Preventivo, Richiesta, Incontro, Sopralluogo, Telefonata, Appuntamento."],
     ["PRIORITÀ ATTIVITÀ", "Se nello stesso mese ci sono più attività per lo stesso amministratore, viene considerata quella con priorità più alta."],
     ["ORDINE ATTIVITÀ", "Appuntamento < Telefonata < Sopralluogo < Incontro < Richiesta < Preventivo < Delibera."],
@@ -1393,6 +1403,12 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 if "EUR" in raw:
                     for r in range(2, ws.max_row + 1):
                         ws.cell(r, idx).number_format = u'€ #,##0.00'
+
+        header = [c.value for c in ws[1]]
+        if "Data ultima delibera" in header:
+            idx = header.index("Data ultima delibera") + 1
+            for r in range(2, ws.max_row + 1):
+                ws.cell(r, idx).number_format = "dd/mm/yyyy"
 
     for sname in ["Avanzamento_Clienti", "Da_Riassegnare", "Da_Attenzionare", "Anomalie"]:
         format_avanzamento_like_sheet(sname)

@@ -1,24 +1,24 @@
 /* ============================================
    app.js - Report Clienti
-   Versione completa con 3 file:
-   1) Tabella Clienti
-   2) Sum_of / Sottoprodotti
-   3) STATI Pratiche
-
-   Include:
+   Versione completa
    - verifica singolo file
-   - caricamento 3 file
-   - report Avanzamento Clienti
-   - Analisi_TC con Preventivi, Delibere, Venduto, Prodotto, Fatturato, Incassato
-   - status clienti da colonna Q Tabella Clienti
+   - stato verifica file con animazione
+   - report excel
+   - foglio iniziale regole RA
+   - fogli nascosti
+   - avanzamento amministratori
+   - valori storici da Tabella Clienti
+   - valori periodo da Sum_of / Lordo€
+   - N° preventivi periodo da Sum_of / Numero
+   - N° delibere periodo deduplicate per CodicePratica
+   - fix delibera su mesi senza miglioramento
+   - famiglia stadio: Debole / Intermedio / Forte / Convertito
 ============================================ */
 
 let pyodide = null;
 
 const fileTab = document.getElementById("fileTabella");
 const fileSum = document.getElementById("fileSum");
-const fileStati = document.getElementById("fileStati");
-
 const btnRun = document.getElementById("btnRun");
 
 const errModal = document.getElementById("errModal");
@@ -30,18 +30,14 @@ const okOk = document.getElementById("okOk");
 const okText = document.getElementById("okText");
 
 const overlay = document.getElementById("loadingOverlay");
-
 const statusTab = document.getElementById("statusTab");
 const statusSum = document.getElementById("statusSum");
-const statusStati = document.getElementById("statusStati");
 
 const state = {
   tabOk: false,
   sumOk: false,
-  statiOk: false,
   tabBytes: null,
   sumBytes: null,
-  statiBytes: null,
 };
 
 function showOverlay() {
@@ -69,25 +65,11 @@ function showError(message) {
 
 function updateRunEnabled() {
   if (!btnRun) return;
-  btnRun.disabled = !(state.tabOk && state.sumOk && state.statiOk);
-}
-
-function getInput(kind) {
-  if (kind === "tab") return fileTab;
-  if (kind === "sum") return fileSum;
-  if (kind === "stati") return fileStati;
-  return null;
-}
-
-function getStatusEl(kind) {
-  if (kind === "tab") return statusTab;
-  if (kind === "sum") return statusSum;
-  if (kind === "stati") return statusStati;
-  return null;
+  btnRun.disabled = !(state.tabOk && state.sumOk);
 }
 
 function showFileStatus(kind, text = "Verifica in corso...") {
-  const el = getStatusEl(kind);
+  const el = kind === "tab" ? statusTab : statusSum;
   if (!el) return;
   const textEl = el.querySelector(".fileStatusText");
   if (textEl) textEl.textContent = text;
@@ -95,7 +77,7 @@ function showFileStatus(kind, text = "Verifica in corso...") {
 }
 
 function hideFileStatus(kind) {
-  const el = getStatusEl(kind);
+  const el = kind === "tab" ? statusTab : statusSum;
   if (!el) return;
   el.classList.add("hidden");
 }
@@ -114,7 +96,6 @@ async function init() {
 
   if (fileTab) fileTab.addEventListener("change", () => onFileSelected("tab"));
   if (fileSum) fileSum.addEventListener("change", () => onFileSelected("sum"));
-  if (fileStati) fileStati.addEventListener("change", () => onFileSelected("stati"));
   if (btnRun) btnRun.addEventListener("click", runReport);
 
   pyodide = await loadPyodide({
@@ -146,46 +127,21 @@ init().catch((e) => {
   showError("Errore inizializzazione: " + (e?.message || e));
 });
 
-function resetKind(kind) {
-  if (kind === "tab") {
-    state.tabOk = false;
-    state.tabBytes = null;
-  } else if (kind === "sum") {
-    state.sumOk = false;
-    state.sumBytes = null;
-  } else if (kind === "stati") {
-    state.statiOk = false;
-    state.statiBytes = null;
-  }
-  updateRunEnabled();
-}
-
-function clearInput(kind) {
-  const input = getInput(kind);
-  if (input) input.value = "";
-}
-
-function expectedKindName(kind) {
-  if (kind === "tab") return "tabella";
-  if (kind === "sum") return "sumof";
-  if (kind === "stati") return "stati";
-  return "unknown";
-}
-
-function okMessage(kind) {
-  if (kind === "tab") return "Tabella Clienti verificata.";
-  if (kind === "sum") return "Sum_of verificato.";
-  if (kind === "stati") return "STATI Pratiche verificato.";
-  return "File verificato.";
-}
-
 async function onFileSelected(kind) {
   if (!pyodide) return;
 
-  const input = getInput(kind);
+  const input = kind === "tab" ? fileTab : fileSum;
   if (!input || !input.files || input.files.length !== 1) return;
 
-  resetKind(kind);
+  if (kind === "tab") {
+    state.tabOk = false;
+    state.tabBytes = null;
+  } else {
+    state.sumOk = false;
+    state.sumBytes = null;
+  }
+
+  updateRunEnabled();
   showFileStatus(kind, "Verifica in corso...");
 
   try {
@@ -197,26 +153,21 @@ import io
 import pandas as pd
 
 def norm_cols(cols):
-    return [str(c).strip().upper().replace(" ", "").replace("_", "") for c in cols]
+    return [str(c).strip().upper() for c in cols]
 
 def score(cols):
-    cset = set(cols)
-
-    tab_s = 0
-    sum_s = 0
-    stati_s = 0
-
-    tab_must = ["IDSOGGETTO", "TIPO", "CLIENTE"]
+    tab_must = {"ID_SOGGETTO", "TIPO", "CLIENTE"}
     tab_bonus = [
-        "RESPONSABILE", "REFERENTE", "STATUS", "STATO",
+        "RESPONSABILE", "RESPONSABILEAREA",
+        "CONDOMINI IN ALBERT", "CONDOMINI AMMINISTRATI",
         "PREVENTIVATO", "DELIBERATO", "FATTURATO", "INCASSATO"
     ]
+    sum_must = {"ANNO", "MESE", "CODICESOGGETTO", "NOMESOGGETTO"}
+    sum_bonus = ["CLASSE ATTIV", "CODICEPRATICA", "LORDO"]
 
-    sum_must = ["ANNO", "MESE", "CODICESOGGETTO", "NOMESOGGETTO"]
-    sum_bonus = ["CLASSEATTIV", "CODICEPRATICA", "LORDO", "NUMERO"]
-
-    stati_must = ["RESPONSABILE", "CODICECOMMESSA", "TIPOSOGGETTO"]
-    stati_bonus = ["VENDUTO", "PRODOTTOLORDO", "FATTURATOTOTALE", "INCASSATOTOTALE"]
+    cset = set(cols)
+    tab_s = 0
+    sum_s = 0
 
     for m in tab_must:
         if m in cset:
@@ -232,31 +183,13 @@ def score(cols):
         if any(b in c for c in cols):
             sum_s += 1
 
-    for m in stati_must:
-        if m in cset:
-            stati_s += 3
-    for b in stati_bonus:
-        if any(b in c for c in cols):
-            stati_s += 2
+    return tab_s, sum_s
 
-    return tab_s, sum_s, stati_s
-
-def classify(tab_s, sum_s, stati_s):
-    scores = {
-        "tabella": tab_s,
-        "sumof": sum_s,
-        "stati": stati_s,
-    }
-    best = max(scores, key=scores.get)
-    best_score = scores[best]
-
-    if best == "tabella" and best_score >= 6 and tab_s > sum_s + 1 and tab_s > stati_s + 1:
+def classify(tab_s, sum_s):
+    if tab_s >= 6 and tab_s > sum_s + 1:
         return "tabella"
-    if best == "sumof" and best_score >= 6 and sum_s > tab_s + 1 and sum_s > stati_s + 1:
+    if sum_s >= 6 and sum_s > tab_s + 1:
         return "sumof"
-    if best == "stati" and best_score >= 8 and stati_s > tab_s + 1 and stati_s > sum_s + 1:
-        return "stati"
-
     return "unknown"
 
 xlsx = bytes(FILE_BYTES)
@@ -267,9 +200,9 @@ best_score = -1
 try:
     df1 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0)
     cols1 = norm_cols(df1.columns)
-    t1, s1, p1 = score(cols1)
-    k1 = classify(t1, s1, p1)
-    sc1 = max(t1, s1, p1)
+    t1, s1 = score(cols1)
+    k1 = classify(t1, s1)
+    sc1 = max(t1, s1)
     if sc1 > best_score:
         best_score = sc1
         best_kind = k1
@@ -278,19 +211,16 @@ except:
 
 try:
     df0 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0, header=None)
-    for i in range(min(100, len(df0))):
-        row = norm_cols(df0.iloc[i].tolist())
-
-        is_tab = ("IDSOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row))
+    for i in range(min(80, len(df0))):
+        row = df0.iloc[i].astype(str).str.upper().str.strip().tolist()
+        is_tab = ("ID_SOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row))
         is_sum = ("ANNO" in row and "MESE" in row and "CODICESOGGETTO" in row)
-        is_stati = ("RESPONSABILE" in row and "CODICECOMMESSA" in row and "TIPOSOGGETTO" in row)
-
-        if is_tab or is_sum or is_stati:
+        if is_tab or is_sum:
             df2 = pd.read_excel(io.BytesIO(xlsx), sheet_name=0, header=i)
             cols2 = norm_cols(df2.columns)
-            t2, s2, p2 = score(cols2)
-            k2 = classify(t2, s2, p2)
-            sc2 = max(t2, s2, p2)
+            t2, s2 = score(cols2)
+            k2 = classify(t2, s2)
+            sc2 = max(t2, s2)
             if sc2 > best_score:
                 best_score = sc2
                 best_kind = k2
@@ -302,11 +232,22 @@ best_kind
 `);
 
     const kindFound = typeof res === "string" ? res : res.toJs();
-    const expected = expectedKindName(kind);
 
-    if (kindFound !== expected) {
-      resetKind(kind);
-      clearInput(kind);
+    let ok = false;
+    if (kind === "tab") ok = kindFound === "tabella";
+    if (kind === "sum") ok = kindFound === "sumof";
+
+    if (!ok) {
+      if (kind === "tab") {
+        fileTab.value = "";
+        state.tabOk = false;
+        state.tabBytes = null;
+      } else {
+        fileSum.value = "";
+        state.sumOk = false;
+        state.sumBytes = null;
+      }
+      updateRunEnabled();
       hideFileStatus(kind);
       showError("File non riconosciuto o struttura non valida.");
       return;
@@ -315,37 +256,45 @@ best_kind
     if (kind === "tab") {
       state.tabOk = true;
       state.tabBytes = bytes;
-    } else if (kind === "sum") {
+    } else {
       state.sumOk = true;
       state.sumBytes = bytes;
-    } else if (kind === "stati") {
-      state.statiOk = true;
-      state.statiBytes = bytes;
     }
 
     updateRunEnabled();
     hideFileStatus(kind);
 
-    if (okText) okText.textContent = okMessage(kind);
+    if (okText) {
+      okText.textContent = kind === "tab"
+        ? "Tabella Clienti verificata."
+        : "Sum_of verificato.";
+    }
+
     showModal(okModal);
 
   } catch (e) {
     console.error(e);
-    resetKind(kind);
+    if (kind === "tab") {
+      state.tabOk = false;
+      state.tabBytes = null;
+    } else {
+      state.sumOk = false;
+      state.sumBytes = null;
+    }
+    updateRunEnabled();
     hideFileStatus(kind);
     showError("Errore verifica file: " + (e?.message || e));
   }
 }
 
 async function runReport() {
-  if (!(state.tabOk && state.sumOk && state.statiOk)) return;
+  if (!(state.tabOk && state.sumOk)) return;
 
   try {
     showOverlay();
 
     pyodide.globals.set("TAB_BYTES", state.tabBytes);
     pyodide.globals.set("SUM_BYTES", state.sumBytes);
-    pyodide.globals.set("STATI_BYTES", state.statiBytes);
 
     const PY_REPORT = String.raw`
 import io
@@ -367,8 +316,6 @@ def norm_id(x):
     s = s.replace("\u00A0", "")
     s = re.sub(r"\s+", "", s)
     s = re.sub(r"\.0$", "", s)
-    if s.lower() in ("nan", "none", "null"):
-        return ""
     return s
 
 def norm_key(x):
@@ -387,18 +334,15 @@ def parse_amount(x):
         return 0.0
     if isinstance(x, (int, float, np.integer, np.floating)):
         return float(x)
-
     s = str(x).strip()
     s = s.replace("€", "").replace("\u00A0", "").replace(" ", "")
-
     if s == "" or s.lower() in ("nan", "none", "null"):
         return 0.0
-
+    # formato italiano: 1.234,56
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
         s = s.replace(",", ".")
-
     try:
         return float(s)
     except:
@@ -418,76 +362,49 @@ def sanitize_sheet_name(name: str) -> str:
     name = re.sub(r'[:\\\\/\\?\\*\\[\\]]', '-', name)
     return name[:31]
 
-def norm_col_name(x):
-    return str(x).strip().upper().replace(" ", "").replace("_", "")
-
 def month_to_int(x):
     if pd.isna(x):
         return np.nan
-
     s = str(x).strip()
-
     try:
         v = int(float(s))
         if 1 <= v <= 12:
             return v
     except:
         pass
-
     m = re.search(r"\b(\d{1,2})\b", s)
     if m:
         v = int(m.group(1))
         if 1 <= v <= 12:
             return v
-
     mesi = {
-        "gen":1, "gennaio":1,
-        "feb":2, "febbraio":2,
-        "mar":3, "marzo":3,
-        "apr":4, "aprile":4,
-        "mag":5, "maggio":5,
-        "giu":6, "giugno":6,
-        "lug":7, "luglio":7,
-        "ago":8, "agosto":8,
+        "gen":1, "gennaio":1, "feb":2, "febbraio":2,
+        "mar":3, "marzo":3, "apr":4, "aprile":4,
+        "mag":5, "maggio":5, "giu":6, "giugno":6,
+        "lug":7, "luglio":7, "ago":8, "agosto":8,
         "set":9, "sett":9, "settembre":9,
-        "ott":10, "ottobre":10,
-        "nov":11, "novembre":11,
+        "ott":10, "ottobre":10, "nov":11, "novembre":11,
         "dic":12, "dicembre":12
     }
-
     low = s.lower()
     for k, v in mesi.items():
         if k in low:
             return v
-
     return np.nan
 
-priority_map = {
-    "07": 7,
-    "06": 6,
-    "04": 5,
-    "03": 4,
-    "05": 3,
-    "01": 2,
-    "02": 1,
-}
+priority_map = {"07":7, "06":6, "04":5, "03":4, "05":3, "01":2, "02":1}
 
 def activity_priority(a):
     if pd.isna(a):
         return 0
-
     s = str(a).strip()
-
     m = re.match(r"^\s*(\d{2})", s)
     if m:
         return priority_map.get(m.group(1), 0)
-
     m2 = re.search(r"\b(0[1-7])\b", s)
     if m2:
         return priority_map.get(m2.group(1), 0)
-
     low = s.lower()
-
     if "deliber" in low:
         return 7
     if "preventiv" in low:
@@ -502,33 +419,28 @@ def activity_priority(a):
         return 2
     if "appunt" in low:
         return 1
-
     return 0
 
 def activity_to_rank(v):
     if pd.isna(v):
         return 0
-
     s = str(v).strip()
     if s == "":
         return 0
-
     m = re.match(r"^\s*(\d{2})", s)
     if m:
         code = m.group(1)
         code_map = {
-            "01": 1,
-            "02": 2,
-            "05": 3,
-            "03": 4,
-            "04": 5,
-            "06": 6,
-            "07": 7,
+            "01": 1,   # appuntamento
+            "02": 2,   # telefonata
+            "03": 4,   # incontro
+            "04": 5,   # richiesta
+            "05": 3,   # sopralluogo
+            "06": 6,   # preventivo
+            "07": 7,   # delibera
         }
         return code_map.get(code, 0)
-
     low = s.lower()
-
     if "appunt" in low:
         return 1
     if "telefon" in low:
@@ -543,12 +455,10 @@ def activity_to_rank(v):
         return 6
     if "deliber" in low:
         return 7
-
     return 0
 
 def famiglia_stadio(v):
     r = activity_to_rank(v)
-
     if r in (1, 2, 4):
         return "Debole"
     if r == 3:
@@ -557,60 +467,51 @@ def famiglia_stadio(v):
         return "Forte"
     if r == 7:
         return "Convertito"
-
     return ""
 
 def trend_mensile(v_old, v_m2, v_m1, v_cur):
     old_r = activity_to_rank(v_old)
-    m2_r = activity_to_rank(v_m2)
-    m1_r = activity_to_rank(v_m1)
+    m2_r  = activity_to_rank(v_m2)
+    m1_r  = activity_to_rank(v_m1)
     cur_r = activity_to_rank(v_cur)
 
     if cur_r == 7:
         return "Deliberato"
-
     if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
         return "Nessuna attività"
 
+    # Vecchia attività presente, ma nessun segnale commerciale recente.
+    # Prima questi casi finivano spesso in "Da verificare"; ora sono "Dormiente".
     if cur_r == 0 and m1_r == 0 and (old_r > 0 or m2_r > 0):
         return "Dormiente"
 
     if m1_r == 0 and cur_r > 0:
         return "Riparte"
-
     if m1_r > 0 and cur_r == 0:
         return "Fermo"
-
     if cur_r > m1_r:
         return "Avanza"
-
     if cur_r == m1_r and cur_r > 0:
         return "Stabile"
-
     if cur_r < m1_r:
         return "Arretra"
-
     return "Da verificare"
 
 def mesi_senza_miglioramento(ranks):
     vals = [int(x) for x in ranks if x is not None]
-
     if not vals:
         return 0
-
     if max(vals) >= 7:
         return 0
 
     best = 0
     months = 0
-
     for r in vals:
         if r > best:
             best = r
             months = 0
         else:
             months += 1
-
     return months
 
 def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, cur_val, anomalia):
@@ -620,8 +521,8 @@ def da_riassegnare(last_rank, mesi_no_improve, trend, old_val, m2_val, m1_val, c
     fam = famiglia_stadio(cur_val)
 
     old_r = activity_to_rank(old_val)
-    m2_r = activity_to_rank(m2_val)
-    m1_r = activity_to_rank(m1_val)
+    m2_r  = activity_to_rank(m2_val)
+    m1_r  = activity_to_rank(m1_val)
     cur_r = activity_to_rank(cur_val)
 
     if old_r == 0 and m2_r == 0 and m1_r == 0 and cur_r == 0:
@@ -695,6 +596,33 @@ def da_attenzionare(last_rank, mesi_no_improve, trend, anomalia, cur_val):
 
     return "No"
 
+def esito_manageriale(last_rank, trend, mesi_no_improve):
+    if trend == "Dormiente":
+        return "Da riattivare"
+    if last_rank == 7:
+        return "Chiuso"
+    if trend == "Avanza" and last_rank >= 5:
+        return "Caldo"
+    if trend == "Avanza":
+        return "Positivo"
+    if trend == "Riparte":
+        return "Da monitorare"
+    if trend == "Stabile" and last_rank <= 2:
+        return "Debole"
+    if trend == "Stabile" and last_rank >= 5:
+        return "In lavorazione"
+    if trend == "Fermo" and last_rank >= 6:
+        return "Critico"
+    if trend == "Fermo":
+        return "Bloccato"
+    if trend == "Arretra":
+        return "Anomalo"
+    if mesi_no_improve >= 2 and last_rank > 0:
+        return "Da recuperare"
+    if trend == "Nessuna attività":
+        return "Da attivare"
+    return "Da verificare"
+
 def azione_consigliata(last_rank, trend, dr, da_att, anomalia):
     if anomalia == "Si":
         return "Controllo manuale"
@@ -722,10 +650,12 @@ def azione_consigliata(last_rank, trend, dr, da_att, anomalia):
         return "Controllo manuale"
     if trend == "Nessuna attività":
         return "Attivare contatto"
-
     return "Da verificare"
 
 def stadio_riferimento(r):
+    # Lo Stadio_Riferimento NON è necessariamente l'ultima attività cronologica.
+    # Prima usa la migliore attività raggiunta nel periodo; poi, se non c'è,
+    # ripiega sull'ultima attività reale e infine sullo storico precedente.
     for col in [
         "Migliore attività nel periodo",
         "Ultima attività nel periodo",
@@ -755,15 +685,19 @@ def stato_relazione(r):
     periodo_valore = prev_periodo + del_periodo
     periodo_attivo = periodo_valore > 0 or n_prev > 0 or n_del > 0
 
+    # Storico buono, ma nessun preventivo/delibera nel periodo:
+    # non è da leggere come convertito attuale, ma come cliente da riattivare.
     if storico_valore > 0 and not periodo_attivo and trend in ("Dormiente", "Nessuna attività", "Fermo", "Da verificare"):
         return "Cliente da riattivare"
 
+    # Cliente che porta lavori nel periodo: non è solo pipeline, è relazione produttiva.
     if n_del >= 2:
         return "Fidelizzato"
-
     if n_del == 1 or del_periodo > 0:
         return "Convertito"
 
+    # Se non ha delibere nel periodo ma lo stadio storico era Delibera,
+    # resta un cliente già convertito in passato, ma oggi va riattivato.
     if last_rank == 7:
         return "Cliente da riattivare"
 
@@ -784,6 +718,47 @@ def stato_relazione(r):
 
     return "Da verificare"
 
+def find_header_row(xlsx_bytes, expected_type):
+    df0 = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=None)
+    for i in range(min(80, len(df0))):
+        row = df0.iloc[i].astype(str).str.upper().str.strip().tolist()
+        if expected_type == "tabella":
+            if "ID_SOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row):
+                return i
+        elif expected_type == "sumof":
+            if "ANNO" in row and "MESE" in row and "CODICESOGGETTO" in row:
+                return i
+    return 0
+
+def read_excel_robust(xlsx_bytes, expected_type):
+    try:
+        df = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0)
+        cols = [str(c).strip().upper() for c in df.columns]
+        if expected_type == "tabella" and "ID_SOGGETTO" in cols:
+            return df
+        if expected_type == "sumof" and "CODICESOGGETTO" in cols and "ANNO" in cols:
+            return df
+    except:
+        pass
+    header_row = find_header_row(xlsx_bytes, expected_type)
+    return pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=header_row)
+
+def pick_col(df, keys, fallback_idx=None):
+    cols = list(df.columns)
+    upmap = {str(c).strip().upper(): c for c in cols}
+    for k in keys:
+        ku = k.upper()
+        if ku in upmap:
+            return upmap[ku]
+    for c in cols:
+        cu = str(c).upper()
+        for k in keys:
+            if k.upper() in cu:
+                return c
+    if fallback_idx is not None and df.shape[1] > fallback_idx:
+        return df.columns[fallback_idx]
+    return None
+
 def detect_anomalia(r):
     old_r = activity_to_rank(r.get("Ultima attività oltre 2 mesi precedenti"))
     m2_r = activity_to_rank(r.get("Ultima attività 2 mesi precedenti"))
@@ -796,17 +771,16 @@ def detect_anomalia(r):
         return "Si"
     if m2_r == 7 and (m1_r > 0 and m1_r < 7):
         return "Si"
-
     return "No"
 
 def status_bucket(x):
     if pd.isna(x):
         return "ALTRO"
-
     s = str(x).strip().lower()
     s = s.replace("_", " ").replace("-", " ")
     s = " ".join(s.split())
 
+    # Ordine importante: INATTIVO contiene la parola ATTIVO.
     if "potenziale" in s and "richiest" in s:
         return "POTENZIALI CON RICHIESTA"
     if "potenziale" in s:
@@ -819,7 +793,6 @@ def status_bucket(x):
         return "PERSI"
     if "attiv" in s:
         return "ATTIVO"
-
     return "ALTRO"
 
 def safe_div(num, den):
@@ -831,88 +804,52 @@ def safe_div(num, den):
     except:
         return 0
 
-def find_header_row(xlsx_bytes, expected_type):
-    df0 = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=None)
+def format_tc_name(x):
+    """Trasforma m.guaglianone@acrobaticagroup.com in GUAGLIANONE."""
+    if pd.isna(x):
+        return ""
 
-    for i in range(min(100, len(df0))):
-        row = [norm_col_name(c) for c in df0.iloc[i].tolist()]
+    s = str(x).strip()
+    if s == "" or s.lower() in ("nan", "none", "null"):
+        return ""
 
-        if expected_type == "tabella":
-            if "IDSOGGETTO" in row and ("TIPO" in row or "CLIENTE" in row):
-                return i
+    # Se è una mail, prendo la parte prima della @.
+    if "@" in s:
+        s = s.split("@")[0]
 
-        if expected_type == "sumof":
-            if "ANNO" in row and "MESE" in row and "CODICESOGGETTO" in row:
-                return i
+    # Se è nel formato iniziale.cognome, tengo il cognome.
+    if "." in s:
+        s = s.split(".")[-1]
 
-        if expected_type == "stati":
-            if "RESPONSABILE" in row and "CODICECOMMESSA" in row and "TIPOSOGGETTO" in row:
-                return i
+    # Se invece fosse nome cognome, tengo l'ultima parola.
+    s = s.replace("_", " ").replace("-", " ")
+    parts = [p for p in s.split() if p]
+    if parts:
+        s = parts[-1]
 
-    return 0
-
-def read_excel_robust(xlsx_bytes, expected_type):
-    try:
-        df = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0)
-        cols = [norm_col_name(c) for c in df.columns]
-
-        if expected_type == "tabella" and "IDSOGGETTO" in cols:
-            return df
-
-        if expected_type == "sumof" and "CODICESOGGETTO" in cols and "ANNO" in cols:
-            return df
-
-        if expected_type == "stati" and "CODICECOMMESSA" in cols and "RESPONSABILE" in cols:
-            return df
-
-    except:
-        pass
-
-    header_row = find_header_row(xlsx_bytes, expected_type)
-    return pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=0, header=header_row)
-
-def pick_col(df, keys, fallback_idx=None):
-    cols = list(df.columns)
-    upmap = {norm_col_name(c): c for c in cols}
-
-    for k in keys:
-        ku = norm_col_name(k)
-        if ku in upmap:
-            return upmap[ku]
-
-    for c in cols:
-        cu = norm_col_name(c)
-        for k in keys:
-            if norm_col_name(k) in cu:
-                return c
-
-    if fallback_idx is not None and df.shape[1] > fallback_idx:
-        return df.columns[fallback_idx]
-
-    return None
+    return s.strip().upper()
 
 # =========================
 # LETTURA FILE
 # =========================
 tab = read_excel_robust(bytes(TAB_BYTES), "tabella")
-su = read_excel_robust(bytes(SUM_BYTES), "sumof")
-stati = read_excel_robust(bytes(STATI_BYTES), "stati")
+su  = read_excel_robust(bytes(SUM_BYTES), "sumof")
 
 # =========================
-# TABELLA CLIENTI
+# TAB CLIENTI - valori storici
 # =========================
-c_id = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
-c_tipo = pick_col(tab, ["TIPO"], fallback_idx=15)
-c_status = pick_col(tab, ["STATUS", "STATO"], fallback_idx=16)
-c_cli = pick_col(tab, ["CLIENTE"], fallback_idx=9)
-c_ref = pick_col(tab, ["RESPONSABILE", "REFERENTE"], fallback_idx=7)
+c_id     = pick_col(tab, ["ID_SOGGETTO"], fallback_idx=8)
+c_tipo   = pick_col(tab, ["TIPO"], fallback_idx=15)
+c_status = pick_col(tab, ["STATUS", "STATO"], fallback_idx=16)  # colonna Q
+c_cli    = pick_col(tab, ["CLIENTE"], fallback_idx=9)
+c_ref  = pick_col(tab, ["RESPONSABILE", "REFERENTE"], fallback_idx=7)
 
-c_ca = pick_col(tab, ["CONDOMINI IN ALBERT"], fallback_idx=20)
-c_cam = pick_col(tab, ["CONDOMINI AMMINISTRATI"], fallback_idx=21)
+c_ca   = pick_col(tab, ["CONDOMINI IN ALBERT"], fallback_idx=20)
+c_cam  = pick_col(tab, ["CONDOMINI AMMINISTRATI"], fallback_idx=21)
 c_prev = pick_col(tab, ["PREVENTIVATO"], fallback_idx=22)
-c_del = pick_col(tab, ["DELIBERATO"], fallback_idx=23)
-c_fat = pick_col(tab, ["FATTURATO"], fallback_idx=24)
-c_inc = pick_col(tab, ["INCASSATO"], fallback_idx=25)
+c_del  = pick_col(tab, ["DELIBERATO"], fallback_idx=23)
+c_fat  = pick_col(tab, ["FATTURATO"], fallback_idx=24)
+c_inc  = pick_col(tab, ["INCASSATO"], fallback_idx=25)
 
 clients = pd.DataFrame({
     "ID_Soggetto": tab[c_id].apply(norm_id),
@@ -927,21 +864,20 @@ clients = pd.DataFrame({
     "FATTURATO_EUR": tab[c_fat].apply(parse_amount) if c_fat is not None else 0,
     "INCASSATO_EUR": tab[c_inc].apply(parse_amount) if c_inc is not None else 0,
 })
-
 clients["ID_Soggetto"] = clients["ID_Soggetto"].astype(str).str.strip()
 
 # =========================
-# SUM_OF
+# SUM OF - attività + valori periodo
 # =========================
-s_anno = pick_col(su, ["ANNO"], fallback_idx=0)
-s_mese = pick_col(su, ["MESE"], fallback_idx=1)
-s_data = pick_col(su, ["DATA"], fallback_idx=3)
-s_att = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=4)
-s_chi = pick_col(su, ["RESPONSABILE", "CHI"], fallback_idx=6)
-s_cod = pick_col(su, ["CODICESOGGETTO", "CODICE SOGGETTO"], fallback_idx=8)
-s_nome = pick_col(su, ["NOMESOGGETTO", "NOME SOGGETTO"], fallback_idx=9)
+s_anno    = pick_col(su, ["ANNO"], fallback_idx=0)
+s_mese    = pick_col(su, ["MESE"], fallback_idx=1)
+s_data    = pick_col(su, ["DATA"], fallback_idx=3)
+s_att     = pick_col(su, ["CLASSE ATTIVITÀ", "CLASSE ATTIVITA", "ATTIVITA", "ATTIVITÀ"], fallback_idx=4)
+s_chi     = pick_col(su, ["RESPONSABILE", "CHI"], fallback_idx=6)
+s_cod     = pick_col(su, ["CODICESOGGETTO", "CODICE SOGGETTO"], fallback_idx=8)
+s_nome    = pick_col(su, ["NOMESOGGETTO", "NOME SOGGETTO"], fallback_idx=9)
 s_pratica = pick_col(su, ["CODICEPRATICA", "CODICE PRATICA"], fallback_idx=10)
-s_numero = pick_col(su, ["NUMERO"], fallback_idx=12)
+s_numero  = pick_col(su, ["NUMERO"], fallback_idx=12)
 s_importo = pick_col(su, ["LORDO€", "LORDO", "IMPORTO", "SUM_OF_IMPORTO"], fallback_idx=13)
 
 sumdf = pd.DataFrame({
@@ -965,49 +901,9 @@ sumdf["Prio"] = sumdf["Attivita"].apply(activity_priority).astype(int)
 sumdf["Periodo"] = (sumdf["Anno"] * 100 + sumdf["Mese_num"]).astype("Int64")
 sumdf = sumdf[(sumdf["ID_Soggetto"] != "")].dropna(subset=["Periodo"]).copy()
 sumdf["_row"] = np.arange(len(sumdf))
-sumdf["_DataSort"] = sumdf["Data_dt"].fillna(pd.Timestamp("1900-01-01"))
 
-# =========================
-# STATI PRATICHE
-# =========================
-st_resp = pick_col(stati, ["RESPONSABILE"], fallback_idx=6)
-st_comm = pick_col(stati, ["CODICECOMMESSA", "CODICE COMMESSA"], fallback_idx=8)
-st_tipo = pick_col(stati, ["TIPOSOGGETTO", "TIPO SOGGETTO"], fallback_idx=10)
-st_vend = pick_col(stati, ["VENDUTO€", "VENDUTO"], fallback_idx=22)
-st_prod = pick_col(stati, ["PRODOTTOLORDO€", "PRODOTTO LORDO", "PRODOTTOLORDO", "PRODOTTO"], fallback_idx=23)
-st_fatt = pick_col(stati, ["FATTURATOTOTALE€", "FATTURATO TOTALE", "FATTURATOTOTALE", "FATTURATO"], fallback_idx=24)
-st_inc = pick_col(stati, ["INCASSATOTOTALE€", "INCASSATO TOTALE", "INCASSATOTOTALE", "INCASSATO"], fallback_idx=25)
-
-stati_df = pd.DataFrame({
-    "Responsabile": stati[st_resp] if st_resp is not None else "",
-    "CodiceCommessa": stati[st_comm].apply(norm_key) if st_comm is not None else "",
-    "TipoSoggetto": stati[st_tipo] if st_tipo is not None else "",
-    "Venduto_Stati": stati[st_vend].apply(parse_amount) if st_vend is not None else 0,
-    "Prodotto": stati[st_prod].apply(parse_amount) if st_prod is not None else 0,
-    "Fatturato": stati[st_fatt].apply(parse_amount) if st_fatt is not None else 0,
-    "Incassato": stati[st_inc].apply(parse_amount) if st_inc is not None else 0,
-})
-
-stati_df["Responsabile"] = stati_df["Responsabile"].fillna("").astype(str).str.strip()
-stati_df["CodiceCommessa"] = stati_df["CodiceCommessa"].fillna("").astype(str).str.strip()
-stati_df["TipoSoggetto"] = stati_df["TipoSoggetto"].fillna("").astype(str).str.strip()
-stati_df = stati_df[(stati_df["CodiceCommessa"] != "") & (stati_df["Responsabile"] != "")].copy()
-stati_df["_row"] = np.arange(len(stati_df))
-
-# Deduplica per commessa, tenendo l'ultima riga.
-stati_df = (
-    stati_df.sort_values(["CodiceCommessa", "_row"])
-    .groupby("CodiceCommessa", as_index=False)
-    .tail(1)
-    .copy()
-)
-
-stati_df["TC"] = stati_df["Responsabile"]
-stati_df["Is_Admin"] = stati_df["TipoSoggetto"].astype(str).str.strip().str.lower().str.contains("amministr", na=False)
-
-# =========================
-# VALORI PERIODO DA SUM_OF
-# =========================
+# Preventivato periodo: somma Lordo€ delle righe 06 PREVENTIVI nel periodo caricato.
+# N° Preventivi periodo: somma della colonna Numero sulle righe 06 PREVENTIVI.
 preventivi_periodo = (
     sumdf[sumdf["Prio"] == 6]
     .groupby("ID_Soggetto", as_index=False)
@@ -1017,21 +913,17 @@ preventivi_periodo = (
     )
 )
 
+# Deliberato periodo: deduplica per CodicePratica.
+# Se lo stesso CodicePratica è stato deliberato più volte, si prende la riga più recente.
 delibere_raw = sumdf[sumdf["Prio"] == 7].copy()
-
 if len(delibere_raw):
     delibere_raw["_pratica_key"] = delibere_raw["CodicePratica"].apply(norm_key)
-    delibere_raw.loc[delibere_raw["_pratica_key"] == "", "_pratica_key"] = delibere_raw.loc[
-        delibere_raw["_pratica_key"] == "",
-        "_row"
-    ].apply(lambda x: f"NOCP_{x}")
-
+    delibere_raw.loc[delibere_raw["_pratica_key"] == "", "_pratica_key"] = delibere_raw.loc[delibere_raw["_pratica_key"] == "", "_row"].apply(lambda x: f"NOCP_{x}")
     delibere_latest = (
         delibere_raw.sort_values(["ID_Soggetto", "_pratica_key", "Data_dt", "Periodo", "_row"])
-        .groupby(["ID_Soggetto", "_pratica_key"], as_index=False)
-        .tail(1)
+                    .groupby(["ID_Soggetto", "_pratica_key"], as_index=False)
+                    .tail(1)
     )
-
     delibere_periodo = (
         delibere_latest
         .groupby("ID_Soggetto", as_index=False)
@@ -1041,7 +933,6 @@ if len(delibere_raw):
         )
     )
 else:
-    delibere_latest = pd.DataFrame(columns=list(sumdf.columns) + ["_pratica_key"])
     delibere_periodo = pd.DataFrame(columns=["ID_Soggetto", "DELIBERATO_PERIODO_EUR", "N_DELIBERE_PERIODO"])
 
 # =========================
@@ -1049,14 +940,14 @@ else:
 # =========================
 best_in_month = (
     sumdf.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
-    .groupby(["ID_Soggetto", "Periodo"], as_index=False)
-    .tail(1)
+         .groupby(["ID_Soggetto", "Periodo"], as_index=False)
+         .tail(1)
 )
 
 best_last = (
     best_in_month.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
-    .groupby("ID_Soggetto", as_index=False)
-    .tail(1)
+                 .groupby("ID_Soggetto", as_index=False)
+                 .tail(1)
 )
 
 last_act = best_last[["ID_Soggetto", "Anno", "Mese_num", "Attivita", "Chi"]].copy()
@@ -1067,27 +958,39 @@ last_act.rename(columns={
     "Chi": "Ultima_Attivita_Fatta_Da"
 }, inplace=True)
 
+# Ultima attività reale nel periodo caricato.
+# Qui NON prendiamo lo stadio più alto: prendiamo l'ultima attività cronologica
+# e la persona che l'ha fatta, qualsiasi attività sia: telefonata, incontro,
+# richiesta, preventivo o delibera.
+sumdf["_DataSort"] = sumdf["Data_dt"].fillna(pd.Timestamp("1900-01-01"))
+
 last_period_act = (
     sumdf.sort_values(["ID_Soggetto", "_DataSort", "Periodo", "_row"])
-    .groupby("ID_Soggetto", as_index=False)
-    .tail(1)[["ID_Soggetto", "Attivita", "Chi"]]
-    .copy()
+         .groupby("ID_Soggetto", as_index=False)
+         .tail(1)[["ID_Soggetto", "Attivita", "Chi"]]
+         .copy()
 )
 last_period_act.rename(columns={
     "Attivita": "Ultima attività nel periodo",
     "Chi": "Ultima attività fatta da"
 }, inplace=True)
 
+# Migliore attività nel periodo: serve per lo Stadio_Riferimento.
+# Esempio: se il cliente ha fatto una delibera e poi una telefonata,
+# l'ultima attività è telefonata, ma lo stadio raggiunto resta delibera.
 best_period_stage = (
     sumdf.sort_values(["ID_Soggetto", "Prio", "_DataSort", "Periodo", "_row"])
-    .groupby("ID_Soggetto", as_index=False)
-    .tail(1)[["ID_Soggetto", "Attivita"]]
-    .copy()
+         .groupby("ID_Soggetto", as_index=False)
+         .tail(1)[["ID_Soggetto", "Attivita"]]
+         .copy()
 )
 best_period_stage.rename(columns={
     "Attivita": "Migliore attività nel periodo"
 }, inplace=True)
 
+# Ultima delibera nel periodo: informazioni operative utili.
+# Non mostriamo più una colonna con scritto solo "07 DELIBERE":
+# mostriamo chi l'ha fatta, il codice pratica e la data dell'ultima delibera.
 ultima_delibera_periodo = sumdf[sumdf["Prio"] == 7].copy()
 if len(ultima_delibera_periodo):
     ultima_delibera_periodo = (
@@ -1129,7 +1032,6 @@ final["Cliente"] = final["Nome_Soggetto_Sum"].fillna(final["Cliente_Tabella"]).f
 # =========================
 admin_mask = final["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 admins_final = final[admin_mask].copy()
-
 admins_base = admins_final[[
     "ID_Soggetto",
     "Cliente",
@@ -1137,7 +1039,6 @@ admins_base = admins_final[[
     "PREVENTIVATO_STORICO_EUR",
     "DELIBERATO_STORICO_EUR"
 ]].copy()
-
 admins_base["ID_Soggetto"] = admins_base["ID_Soggetto"].astype(str).str.strip()
 
 admins_base = admins_base.merge(preventivi_periodo, on="ID_Soggetto", how="left")
@@ -1145,7 +1046,6 @@ admins_base = admins_base.merge(delibere_periodo, on="ID_Soggetto", how="left")
 
 for c in ["PREVENTIVATO_PERIODO_EUR", "DELIBERATO_PERIODO_EUR"]:
     admins_base[c] = admins_base[c].fillna(0)
-
 for c in ["N_PREVENTIVI_PERIODO", "N_DELIBERE_PERIODO"]:
     admins_base[c] = admins_base[c].fillna(0).astype(int)
 
@@ -1167,7 +1067,6 @@ def mese_anno_da_periodo(periodo):
         5: "maggio", 6: "giugno", 7: "luglio", 8: "agosto",
         9: "settembre", 10: "ottobre", 11: "novembre", 12: "dicembre"
     }
-
     try:
         periodo_int = int(periodo)
         anno = periodo_int // 100
@@ -1181,47 +1080,49 @@ label_m2 = f"Ultima attività {mese_anno_da_periodo(prev2)}" if prev2 is not Non
 label_m1 = f"Ultima attività {mese_anno_da_periodo(prev1)}" if prev1 is not None else "Ultima attività mese precedente"
 label_cur = f"Attività {mese_anno_da_periodo(max_period)}" if max_period is not None else "Attività ultimo mese"
 
+def mese_anno_breve_da_periodo(periodo):
+    try:
+        periodo_int = int(periodo)
+        anno = periodo_int // 100
+        mese = periodo_int % 100
+        return f"{mese:02d}/{anno}"
+    except:
+        return "periodo"
+
+min_period = int(sumdf["Periodo"].min()) if len(sumdf) else None
+max_period_report = int(sumdf["Periodo"].max()) if len(sumdf) else None
+periodo_label = (
+    f"da {mese_anno_breve_da_periodo(min_period)} a {mese_anno_breve_da_periodo(max_period_report)}"
+    if min_period is not None and max_period_report is not None
+    else "del periodo analizzato"
+)
+
 admin_months = best_in_month.merge(
     admins_base[["ID_Soggetto"]],
     on="ID_Soggetto",
     how="inner"
 ).copy()
 
-cur_df = admin_months[admin_months["Periodo"] == max_period][["ID_Soggetto", "Attivita", "Chi", "Prio"]].copy() if max_period is not None else pd.DataFrame(columns=["ID_Soggetto", "Attivita", "Chi", "Prio"])
-cur_df.rename(columns={
-    "Attivita": "Ultima attività",
-    "Chi": "Attività ultimo mese fatta da",
-    "Prio": "Prio_cur"
-}, inplace=True)
+cur_df = admin_months[admin_months["Periodo"] == max_period][["ID_Soggetto", "Attivita", "Chi", "Prio"]].copy() if max_period is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita","Chi","Prio"])
+cur_df.rename(columns={"Attivita":"Ultima attività", "Chi":"Attività ultimo mese fatta da", "Prio":"Prio_cur"}, inplace=True)
 
-m1_df = admin_months[admin_months["Periodo"] == prev1][["ID_Soggetto", "Attivita", "Prio"]].copy() if prev1 is not None else pd.DataFrame(columns=["ID_Soggetto", "Attivita", "Prio"])
-m1_df.rename(columns={
-    "Attivita": "Ultima attività mese precedente",
-    "Prio": "Prio_m1"
-}, inplace=True)
+m1_df = admin_months[admin_months["Periodo"] == prev1][["ID_Soggetto", "Attivita", "Prio"]].copy() if prev1 is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita","Prio"])
+m1_df.rename(columns={"Attivita":"Ultima attività mese precedente", "Prio":"Prio_m1"}, inplace=True)
 
-m2_df = admin_months[admin_months["Periodo"] == prev2][["ID_Soggetto", "Attivita", "Prio"]].copy() if prev2 is not None else pd.DataFrame(columns=["ID_Soggetto", "Attivita", "Prio"])
-m2_df.rename(columns={
-    "Attivita": "Ultima attività 2 mesi precedenti",
-    "Prio": "Prio_m2"
-}, inplace=True)
+m2_df = admin_months[admin_months["Periodo"] == prev2][["ID_Soggetto", "Attivita", "Prio"]].copy() if prev2 is not None else pd.DataFrame(columns=["ID_Soggetto","Attivita","Prio"])
+m2_df.rename(columns={"Attivita":"Ultima attività 2 mesi precedenti", "Prio":"Prio_m2"}, inplace=True)
 
 old_df = admin_months[admin_months["Periodo"] < prev2].copy() if prev2 is not None else pd.DataFrame(columns=admin_months.columns)
-
 if len(old_df):
     old_best = (
         old_df.sort_values(["ID_Soggetto", "Periodo", "Prio", "_row"])
-        .groupby("ID_Soggetto", as_index=False)
-        .tail(1)[["ID_Soggetto", "Attivita", "Prio"]]
-        .copy()
+              .groupby("ID_Soggetto", as_index=False)
+              .tail(1)[["ID_Soggetto", "Attivita", "Prio"]]
+              .copy()
     )
 else:
-    old_best = pd.DataFrame(columns=["ID_Soggetto", "Attivita", "Prio"])
-
-old_best.rename(columns={
-    "Attivita": "Ultima attività oltre 2 mesi precedenti",
-    "Prio": "Prio_old"
-}, inplace=True)
+    old_best = pd.DataFrame(columns=["ID_Soggetto","Attivita","Prio"])
+old_best.rename(columns={"Attivita":"Ultima attività oltre 2 mesi precedenti", "Prio":"Prio_old"}, inplace=True)
 
 history_periods = sorted(admin_months["Periodo"].dropna().astype(int).unique().tolist())
 hist_wide = pd.DataFrame({"ID_Soggetto": admins_base["ID_Soggetto"].unique()})
@@ -1290,6 +1191,15 @@ avanzamento_clienti["Da_Attenzionare"] = avanzamento_clienti.apply(
     axis=1
 )
 
+avanzamento_clienti["Esito_Manageriale"] = avanzamento_clienti.apply(
+    lambda r: esito_manageriale(
+        int(r.get("Ultimo_Rank", 0) or 0),
+        r.get("Trend_Mensile"),
+        int(r.get("Mesi_senza_miglioramento", 0) or 0)
+    ),
+    axis=1
+)
+
 avanzamento_clienti["Azione_Consigliata"] = avanzamento_clienti.apply(
     lambda r: azione_consigliata(
         int(r.get("Ultimo_Rank", 0) or 0),
@@ -1303,6 +1213,8 @@ avanzamento_clienti["Azione_Consigliata"] = avanzamento_clienti.apply(
 
 avanzamento_clienti["Stato_Relazione"] = avanzamento_clienti.apply(stato_relazione, axis=1)
 
+# Cliente storico senza valore nel periodo: non lo butto in rosso secco,
+# lo porto a riattivazione/attenzione commerciale.
 mask_riattivare = avanzamento_clienti["Stato_Relazione"].eq("Cliente da riattivare")
 avanzamento_clienti.loc[mask_riattivare, "Da_Riassegnare"] = "No"
 avanzamento_clienti.loc[mask_riattivare, "Da_Attenzionare"] = "Si"
@@ -1312,23 +1224,55 @@ mask_dormiente = avanzamento_clienti["Stato_Relazione"].eq("Dormiente") & avanza
 avanzamento_clienti.loc[mask_dormiente, "Da_Attenzionare"] = "Si"
 avanzamento_clienti.loc[mask_dormiente, "Azione_Consigliata"] = "Riattivare"
 
+# Se non ha storico e non ha attività, non è automaticamente "da riassegnare":
+# è un prospect/cliente freddo da attivare.
 mask_freddo = avanzamento_clienti["Stato_Relazione"].eq("Nuovo/Freddo")
 avanzamento_clienti.loc[mask_freddo, "Da_Riassegnare"] = "No"
 avanzamento_clienti.loc[mask_freddo, "Da_Attenzionare"] = "No"
 avanzamento_clienti.loc[mask_freddo, "Azione_Consigliata"] = "Attivare prospect"
 
+# Un cliente convertito/fidelizzato non va riassegnato automaticamente:
+# prima va presidiato o consolidato.
 mask_valore_relazione = avanzamento_clienti["Stato_Relazione"].isin(["Convertito", "Fidelizzato"])
 avanzamento_clienti.loc[mask_valore_relazione, "Da_Riassegnare"] = "No"
 avanzamento_clienti.loc[mask_valore_relazione & avanzamento_clienti["Da_Attenzionare"].eq("Si"), "Azione_Consigliata"] = "Presidiare relazione"
 
+# Micro-fix finale: Esito_Manageriale deve essere coerente con Stato_Relazione.
+# Evita casi tipo Fidelizzato/Convertito che finiscono ancora in "Da verificare".
 mask_fidelizzato = avanzamento_clienti["Stato_Relazione"].eq("Fidelizzato")
+avanzamento_clienti.loc[mask_fidelizzato, "Esito_Manageriale"] = "Fidelizzato"
+avanzamento_clienti.loc[mask_fidelizzato, "Da_Riassegnare"] = "No"
 avanzamento_clienti.loc[mask_fidelizzato, "Azione_Consigliata"] = "Presidiare relazione"
 
 mask_convertito = avanzamento_clienti["Stato_Relazione"].eq("Convertito")
-avanzamento_clienti.loc[
-    mask_convertito & avanzamento_clienti["Azione_Consigliata"].isin(["Da verificare", "Attenzionare", "Valutare riassegnazione"]),
-    "Azione_Consigliata"
-] = "Consolidare relazione"
+avanzamento_clienti.loc[mask_convertito, "Esito_Manageriale"] = "Convertito"
+avanzamento_clienti.loc[mask_convertito, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_convertito & avanzamento_clienti["Azione_Consigliata"].isin(["Da verificare", "Attenzionare", "Valutare riassegnazione"]), "Azione_Consigliata"] = "Consolidare relazione"
+
+mask_riattivare_final = avanzamento_clienti["Stato_Relazione"].eq("Cliente da riattivare")
+avanzamento_clienti.loc[mask_riattivare_final, "Esito_Manageriale"] = "Da riattivare"
+avanzamento_clienti.loc[mask_riattivare_final, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_riattivare_final, "Da_Attenzionare"] = "Si"
+avanzamento_clienti.loc[mask_riattivare_final, "Azione_Consigliata"] = "Riattivare cliente storico"
+
+mask_dormiente_final = avanzamento_clienti["Stato_Relazione"].eq("Dormiente")
+avanzamento_clienti.loc[mask_dormiente_final, "Esito_Manageriale"] = "Dormiente"
+avanzamento_clienti.loc[mask_dormiente_final & avanzamento_clienti["Azione_Consigliata"].isin(["Da verificare", "Attenzionare"]), "Azione_Consigliata"] = "Riattivare"
+
+mask_nuovo_freddo_final = avanzamento_clienti["Stato_Relazione"].eq("Nuovo/Freddo")
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Esito_Manageriale"] = "Da attivare"
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Da_Riassegnare"] = "No"
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Da_Attenzionare"] = "No"
+avanzamento_clienti.loc[mask_nuovo_freddo_final, "Azione_Consigliata"] = "Attivare prospect"
+
+mask_caldo_final = avanzamento_clienti["Stato_Relazione"].eq("Caldo")
+avanzamento_clienti.loc[mask_caldo_final & avanzamento_clienti["Esito_Manageriale"].eq("Da verificare"), "Esito_Manageriale"] = "Caldo"
+
+mask_sviluppo_final = avanzamento_clienti["Stato_Relazione"].eq("In sviluppo")
+avanzamento_clienti.loc[mask_sviluppo_final & avanzamento_clienti["Esito_Manageriale"].eq("Da verificare"), "Esito_Manageriale"] = "In sviluppo"
+
+mask_critico_final = avanzamento_clienti["Stato_Relazione"].eq("Critico")
+avanzamento_clienti.loc[mask_critico_final, "Esito_Manageriale"] = "Critico"
 
 adv_cols = [
     "Cliente",
@@ -1367,37 +1311,47 @@ for col in adv_cols:
 
 avanzamento_clienti = avanzamento_clienti[adv_cols].copy()
 
-# =========================
-# REGOLE
-# =========================
 regole_ra = pd.DataFrame([
     ["SCOPO DEL FILE", "Supportare il monitoraggio commerciale degli amministratori e aiutare il RA a distinguere casi sani, casi da attenzionare e casi da riassegnare."],
-    ["FOGLIO ANALISI_TC", "Riepiloga per TC preventivi, delibere, venduto, prodotto, fatturato, incassato, peso degli amministratori e composizione dello status clienti ufficiale della colonna Q della Tabella Clienti."],
+    ["PERIODO ANALIZZATO", periodo_label],
+    ["FOGLIO PRINCIPALE", "Il foglio principale è questo: 00_Regole_RA. Serve per spiegare le regole a chi riceve il file."],
     ["FOGLIO AVANZAMENTO_CLIENTI", "Contiene una riga per ogni amministratore con valore storico, valore del periodo caricato, movimento commerciale e valutazioni automatiche."],
+    ["FOGLIO ANALISI_TC", "Riepiloga per TC preventivi, delibere, venduto, peso degli amministratori e composizione dello status clienti ufficiale della colonna Q della Tabella Clienti."],
     ["PREVENTIVATO STORICO €", "Valore preventivato complessivo preso dalla Tabella Clienti."],
     ["DELIBERATO STORICO €", "Valore deliberato complessivo preso dalla Tabella Clienti."],
-    ["PREVENTIVATO PERIODO €", "Somma del Lordo€ nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
-    ["DELIBERATO PERIODO €", "Somma del Lordo€ nel Sum_of per le righe 07 DELIBERE del periodo caricato, deduplicate per CodicePratica prendendo la riga più recente."],
-    ["N° PREVENTIVI PERIODO", "Somma della colonna Numero nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
-    ["N° DELIBERE PERIODO", "Conta le pratiche deliberate uniche nel periodo. Se lo stesso CodicePratica compare più volte come delibera, conta una sola volta e prende il valore più recente."],
-    ["PRODOTTO / FATTURATO / INCASSATO IN ANALISI_TC", "Derivano dal file STATI Pratiche create nell’anno, deduplicato per CodiceCommessa."],
-    ["STATUS CLIENTI IN ANALISI_TC", "Attivo, Semi Attivo, Inattivo, Persi, Potenziali e Potenziali con Richiesta vengono presi dalla colonna Q della Tabella Clienti."],
-    ["ATTIVITÀ MENSILI", "Le colonne attività mensili servono a verificare se il cliente è stato davvero lavorato nei mesi recenti."],
-    ["ULTIMA ATTIVITÀ NEL PERIODO", "Indica la vera ultima attività cronologica rilevata per il cliente nel periodo caricato."],
+    ["PREVENTIVATO € PERIODO ANALIZZATO", "Somma del Lordo€ nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
+    ["DELIBERATO € PERIODO ANALIZZATO", "Somma del Lordo€ nel Sum_of per le righe 07 DELIBERE del periodo caricato, deduplicate per CodicePratica prendendo la riga più recente."],
+    ["N° PREVENTIVI PERIODO ANALIZZATO", "Somma della colonna Numero nel Sum_of per le righe 06 PREVENTIVI del periodo caricato."],
+    ["N° DELIBERE PERIODO ANALIZZATO", "Conta le pratiche deliberate uniche nel periodo. Se lo stesso CodicePratica compare più volte come delibera, conta una sola volta e prende il valore più recente."],
+    ["FATTURATO / INCASSATO", "Non vengono calcolati in Analisi_TC perché nei file attuali non esiste una fonte periodo affidabile coerente con il Sum_of."],
+    ["STATUS CLIENTI IN ANALISI_TC", "Attivo, Semi Attivo, Inattivo, Persi, Potenziali e Potenziali con Richiesta vengono presi dalla colonna Q della Tabella Clienti. Inattivo significa cliente che ha lavorato in passato e oggi non più; Potenziale significa cliente che non ha ancora lavorato."],
+    ["STADIO_RIFERIMENTO", "Rappresenta lo stadio commerciale più utile raggiunto: usa prima la Migliore attività nel periodo, poi la vera ultima attività nel periodo e infine lo storico precedente. Serve per non perdere una delibera solo perché dopo è stata fatta una telefonata."],
+    ["FAMIGLIA_STADIO", "Calcolata sullo Stadio_Riferimento. Debole = Appuntamento/Telefonata/Incontro. Intermedio = Sopralluogo. Forte = Richiesta/Preventivo. Convertito = Delibera."],
+    [label_old.upper(), "Migliore attività trovata in tutti i mesi precedenti rispetto al mese -2 del file Sum_of."],
+    [label_m2.upper(), "Migliore attività del mese -2 rispetto all’ultimo mese presente nel file Sum_of."],
+    [label_m1.upper(), "Migliore attività del mese precedente rispetto all’ultimo mese presente nel file Sum_of."],
+    [label_cur.upper(), "Migliore attività svolta nell’ultimo mese presente nel file Sum_of."],
+    ["ATTIVITÀ ULTIMO MESE FATTA DA", "Indica chi ha fatto l’attività dell’ultimo mese, se presente."],
+    ["ULTIMA ATTIVITÀ NEL PERIODO", "Indica la vera ultima attività cronologica rilevata per il cliente nel periodo caricato, anche se non è avvenuta nell’ultimo mese del file."],
     ["ULTIMA ATTIVITÀ FATTA DA", "Indica chi ha fatto la vera ultima attività cronologica nel periodo caricato."],
     ["ULTIMA DELIBERA FATTA DA", "Indica chi ha fatto l’ultima delibera nel periodo caricato."],
     ["CODICE PRATICA ULTIMA DELIBERA", "Indica il CodicePratica associato all’ultima delibera cronologica del cliente nel periodo caricato."],
-    ["DATA ULTIMA DELIBERA", "Indica la data dell’ultima delibera cronologica del cliente nel periodo caricato."],
+    ["DATA ULTIMA DELIBERA", "Indica la data dell’ultima delibera cronologica del cliente nel periodo caricato, se presente nel Sum_of."],
     ["MIGLIORE ATTIVITÀ NEL PERIODO", "Indica lo stadio più alto raggiunto nel periodo secondo la priorità: Delibera, Preventivo, Richiesta, Incontro, Sopralluogo, Telefonata, Appuntamento."],
-    ["STADIO_RIFERIMENTO", "Colonna tecnica nascosta: usa la migliore attività nel periodo, poi la vera ultima attività nel periodo e infine lo storico precedente."],
-    ["DA_RIASSEGNARE", "Indica i casi in cui è consigliabile valutare una riassegnazione commerciale."],
-    ["DA_ATTENZIONARE", "Indica casi da monitorare senza riassegnazione immediata."],
-    ["AZIONE_CONSIGLIATA", "Suggerimento operativo automatico."],
+    ["PRIORITÀ ATTIVITÀ", "Se nello stesso mese ci sono più attività per lo stesso amministratore, viene considerata quella con priorità più alta."],
+    ["ORDINE ATTIVITÀ", "Appuntamento < Telefonata < Sopralluogo < Incontro < Richiesta < Preventivo < Delibera."],
+    ["TREND_MENSILE", "Confronta mese precedente e ultimo mese: Deliberato, Avanza, Riparte, Stabile, Fermo, Dormiente, Arretra, Nessuna attività, Da verificare."],
+    ["STATO_RELAZIONE", "Classifica la qualità della relazione: Nuovo/Freddo, In sviluppo, Caldo, Convertito, Fidelizzato, Dormiente, Cliente da riattivare, Critico. Nuovo/Freddo non viene riassegnato automaticamente: è da attivare."],
+    ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto. Se nello storico è presente Delibera, il valore viene posto a 0 perché oltre Delibera non si può migliorare."],
+    ["DA_RIASSEGNARE = SI", "Sugli stadi deboli è più severo. Sugli stadi forti è più tollerante. Delibera non viene trattata come cliente da riassegnare solo perché non migliora."],
+    ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare, con logica diversa a seconda della famiglia dello stadio."],
+    ["AZIONE_CONSIGLIATA", "Suggerimento operativo automatico: monitorare, sostenere avanzamento, verificare blocco, controllo manuale, valutare riassegnazione, ecc."],
+    ["ANOMALIA = SI", "Segnala casi incoerenti, per esempio regressioni sospette o ritorni a stadi inferiori dopo livelli più alti."],
+    ["FOGLIO DA_RIASSEGNARE", "Contiene solo i casi più critici che meritano valutazione di riassegnazione."],
+    ["FOGLIO SINTESI_PER_REFERENTE", "Raggruppa i risultati per referente commerciale, per supportare il controllo manageriale."],
+    ["SEMAFORI", "Rosso = priorità alta / criticità. Giallo = attenzione. Verde = andamento positivo."],
 ], columns=["Voce", "Spiegazione"])
 
-# =========================
-# SINTESI AVANZAMENTO
-# =========================
 status_sort_map = {
     "Deliberato": 1,
     "Avanza": 2,
@@ -1421,10 +1375,10 @@ avanzamento_clienti = (
 
 sintesi_avanzamento = (
     avanzamento_clienti
-    .groupby(["Migliore attività nel periodo", "Trend_Mensile"], dropna=False)
+    .groupby(["Ultima attività", "Trend_Mensile"], dropna=False)
     .size()
     .reset_index(name="N_Clienti")
-    .sort_values(["Migliore attività nel periodo", "Trend_Mensile", "N_Clienti"], ascending=[True, True, False])
+    .sort_values(["Ultima attività", "Trend_Mensile", "N_Clienti"], ascending=[True, True, False])
 )
 
 sintesi_stato = (
@@ -1451,6 +1405,8 @@ anomalie_df = avanzamento_clienti[avanzamento_clienti["Anomalia"] == "Si"].copy(
 # =========================
 # ANALISI TC
 # =========================
+# Obiettivo: riepilogo manageriale per TC con produzione commerciale,
+# peso amministratori e stato del portafoglio amministratori.
 clients_tc = clients.copy()
 clients_tc["TC"] = clients_tc["Referente_Commerciale"].fillna("").astype(str).str.strip()
 clients_tc = clients_tc[clients_tc["TC"] != ""].copy()
@@ -1466,17 +1422,21 @@ sumdf_tc["TC"] = sumdf_tc["Chi"].fillna("").astype(str).str.strip()
 sumdf_tc = sumdf_tc[sumdf_tc["TC"] != ""].copy()
 sumdf_tc["Is_Admin"] = sumdf_tc["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 
+# Preventivi: somma della colonna Numero sulle righe 06 PREVENTIVI.
 prev_all = (
     sumdf_tc[sumdf_tc["Prio"] == 6]
     .groupby("TC", as_index=False)
     .agg(PREVENTIVI=("Numero", "sum"))
 )
-
 prev_admin = (
     sumdf_tc[(sumdf_tc["Prio"] == 6) & (sumdf_tc["Is_Admin"])]
     .groupby("TC", as_index=False)
     .agg(PREVENTIVI_AMM=("Numero", "sum"))
 )
+
+# Delibere e venduto: pratiche deliberate deduplicate, prendendo la riga più recente.
+if "delibere_latest" not in globals():
+    delibere_latest = pd.DataFrame(columns=list(sumdf.columns) + ["_pratica_key"])
 
 delib_tc = delibere_latest.merge(
     clients[["ID_Soggetto", "Tipo"]],
@@ -1503,31 +1463,12 @@ delib_admin = (
     .agg(DELIBERE_AMM=("_pratica_key", "nunique"), VENDUTO_AMM=("Importo_EUR", "sum"))
 ) if len(delib_tc) else pd.DataFrame(columns=["TC", "DELIBERE_AMM", "VENDUTO_AMM"])
 
-stati_all = (
-    stati_df.groupby("TC", as_index=False)
-    .agg(
-        PRODOTTO=("Prodotto", "sum"),
-        FATTURATO=("Fatturato", "sum"),
-        INCASSATO=("Incassato", "sum")
-    )
-)
-
-stati_admin = (
-    stati_df[stati_df["Is_Admin"]]
-    .groupby("TC", as_index=False)
-    .agg(
-        PRODOTTO_AMM=("Prodotto", "sum"),
-        FATTURATO_AMM=("Fatturato", "sum"),
-        INCASSATO_AMM=("Incassato", "sum")
-    )
-)
-
+# Status ufficiale dalla colonna Q della Tabella Clienti, solo amministratori.
 status_counts = (
     clients_tc[clients_tc["Is_Admin"]]
     .pivot_table(index="TC", columns="Status_Bucket", values="ID_Soggetto", aggfunc="nunique", fill_value=0)
     .reset_index()
 )
-
 for col in ["ATTIVO", "SEMI ATTIVO", "INATTIVO", "PERSI", "POTENZIALI", "POTENZIALI CON RICHIESTA"]:
     if col not in status_counts.columns:
         status_counts[col] = 0
@@ -1549,38 +1490,25 @@ fidelizzati_tc = (
 tc_list = pd.DataFrame({
     "TC": sorted(set(
         list(sumdf_tc["TC"].dropna().astype(str)) +
-        list(clients_tc["TC"].dropna().astype(str)) +
-        list(stati_df["TC"].dropna().astype(str))
+        list(clients_tc["TC"].dropna().astype(str))
     ))
 })
 
 analisi_tc = tc_list.copy()
-
 for df_merge in [
-    prev_all,
-    prev_admin,
-    delib_all,
-    delib_admin,
-    stati_all,
-    stati_admin,
-    clienti_con_delibera,
-    fidelizzati_tc,
+    prev_all, prev_admin,
+    delib_all, delib_admin,
+    clienti_con_delibera, fidelizzati_tc,
     status_counts,
 ]:
     analisi_tc = analisi_tc.merge(df_merge, on="TC", how="left")
 
 num_cols_fill = [
-    "PREVENTIVI", "PREVENTIVI_AMM",
-    "DELIBERE", "DELIBERE_AMM",
+    "PREVENTIVI", "PREVENTIVI_AMM", "DELIBERE", "DELIBERE_AMM",
     "VENDUTO", "VENDUTO_AMM",
-    "PRODOTTO", "PRODOTTO_AMM",
-    "FATTURATO", "FATTURATO_AMM",
-    "INCASSATO", "INCASSATO_AMM",
     "CLIENTI_CON_DELIBERA", "FIDELIZZATI",
-    "ATTIVO", "SEMI ATTIVO", "INATTIVO", "PERSI",
-    "POTENZIALI", "POTENZIALI CON RICHIESTA"
+    "ATTIVO", "SEMI ATTIVO", "INATTIVO", "PERSI", "POTENZIALI", "POTENZIALI CON RICHIESTA"
 ]
-
 for c in num_cols_fill:
     if c not in analisi_tc.columns:
         analisi_tc[c] = 0
@@ -1589,9 +1517,6 @@ for c in num_cols_fill:
 analisi_tc["% PREV. AMM."] = analisi_tc.apply(lambda r: safe_div(r["PREVENTIVI_AMM"], r["PREVENTIVI"]), axis=1)
 analisi_tc["% DEL. AMM."] = analisi_tc.apply(lambda r: safe_div(r["DELIBERE_AMM"], r["DELIBERE"]), axis=1)
 analisi_tc["% VENDUTO AMM."] = analisi_tc.apply(lambda r: safe_div(r["VENDUTO_AMM"], r["VENDUTO"]), axis=1)
-analisi_tc["% PRODOTTO AMM."] = analisi_tc.apply(lambda r: safe_div(r["PRODOTTO_AMM"], r["PRODOTTO"]), axis=1)
-analisi_tc["% FATT. AMM."] = analisi_tc.apply(lambda r: safe_div(r["FATTURATO_AMM"], r["FATTURATO"]), axis=1)
-analisi_tc["% INC. AMM."] = analisi_tc.apply(lambda r: safe_div(r["INCASSATO_AMM"], r["INCASSATO"]), axis=1)
 analisi_tc["% CHIUSURA"] = analisi_tc.apply(lambda r: safe_div(r["DELIBERE"], r["PREVENTIVI"]), axis=1)
 analisi_tc["DELIBERA MEDIA"] = analisi_tc.apply(lambda r: safe_div(r["VENDUTO"], r["DELIBERE"]), axis=1)
 
@@ -1606,15 +1531,6 @@ analisi_tc = analisi_tc[[
     "VENDUTO",
     "VENDUTO_AMM",
     "% VENDUTO AMM.",
-    "PRODOTTO",
-    "PRODOTTO_AMM",
-    "% PRODOTTO AMM.",
-    "FATTURATO",
-    "FATTURATO_AMM",
-    "% FATT. AMM.",
-    "INCASSATO",
-    "INCASSATO_AMM",
-    "% INC. AMM.",
     "% CHIUSURA",
     "DELIBERA MEDIA",
     "CLIENTI_CON_DELIBERA",
@@ -1627,34 +1543,25 @@ analisi_tc = analisi_tc[[
     "POTENZIALI CON RICHIESTA",
 ]].copy()
 
+# Elimina dall'Analisi_TC i TC completamente a zero, così il foglio resta leggibile.
 metric_cols_tc = [c for c in analisi_tc.columns if c != "TC" and not c.startswith("%")]
 if len(metric_cols_tc):
     analisi_tc = analisi_tc[analisi_tc[metric_cols_tc].sum(axis=1) != 0].copy()
 
+# Riga totale con percentuali ricalcolate sui totali.
 tot = {c: 0 for c in analisi_tc.columns}
 tot["TC"] = "TOTALE"
-
 for c in num_cols_fill:
     if c in analisi_tc.columns:
         tot[c] = analisi_tc[c].sum()
-
 tot["% PREV. AMM."] = safe_div(tot["PREVENTIVI_AMM"], tot["PREVENTIVI"])
 tot["% DEL. AMM."] = safe_div(tot["DELIBERE_AMM"], tot["DELIBERE"])
 tot["% VENDUTO AMM."] = safe_div(tot["VENDUTO_AMM"], tot["VENDUTO"])
-tot["% PRODOTTO AMM."] = safe_div(tot["PRODOTTO_AMM"], tot["PRODOTTO"])
-tot["% FATT. AMM."] = safe_div(tot["FATTURATO_AMM"], tot["FATTURATO"])
-tot["% INC. AMM."] = safe_div(tot["INCASSATO_AMM"], tot["INCASSATO"])
 tot["% CHIUSURA"] = safe_div(tot["DELIBERE"], tot["PREVENTIVI"])
 tot["DELIBERA MEDIA"] = safe_div(tot["VENDUTO"], tot["DELIBERE"])
 
-analisi_tc = pd.concat([
-    analisi_tc.sort_values("VENDUTO", ascending=False),
-    pd.DataFrame([tot])
-], ignore_index=True)
+analisi_tc = pd.concat([analisi_tc.sort_values("VENDUTO", ascending=False), pd.DataFrame([tot])], ignore_index=True)
 
-# =========================
-# OUTPUT GENERALE
-# =========================
 output_cols = [
     "Cliente",
     "Referente_Commerciale",
@@ -1681,19 +1588,17 @@ header_overrides = {
 # SCRITTURA EXCEL
 # =========================
 out = io.BytesIO()
-
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
     regole_ra.to_excel(writer, sheet_name="00_Regole_RA", index=False)
     analisi_tc.to_excel(writer, sheet_name="Analisi_TC", index=False)
 
     riepilogo = (
         final.assign(Tipo=final["Tipo"].fillna("Senza_Tipo"))
-        .groupby("Tipo", dropna=False)
-        .size()
-        .reset_index(name="N_clienti")
-        .sort_values("N_clienti", ascending=False)
+             .groupby("Tipo", dropna=False)
+             .size()
+             .reset_index(name="N_clienti")
+             .sort_values("N_clienti", ascending=False)
     )
-
     riepilogo.to_excel(writer, sheet_name="Riepilogo", index=False)
     corrispondenza.to_excel(writer, sheet_name="Corrispondenza", index=False)
     avanzamento_clienti.to_excel(writer, sheet_name="Avanzamento_Clienti", index=False)
@@ -1715,12 +1620,10 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         sheet = sanitize_sheet_name(tipo)
         base = sheet
         k = 1
-
         while sheet in used:
             k += 1
             suf = f"_{k}"
             sheet = (base[:31-len(suf)] + suf)[:31]
-
         used.add(sheet)
         df_t.copy()[output_cols].to_excel(writer, sheet_name=sheet, index=False)
 
@@ -1729,14 +1632,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     if "00_Regole_RA" in wb.sheetnames:
         wb.active = wb.sheetnames.index("00_Regole_RA")
 
-    visible_sheets = {
-        "00_Regole_RA",
-        "Analisi_TC",
-        "Avanzamento_Clienti",
-        "Sintesi_Per_Referente",
-        "Da_Riassegnare"
-    }
-
+    visible_sheets = {"00_Regole_RA", "Analisi_TC", "Avanzamento_Clienti", "Sintesi_Per_Referente", "Da_Riassegnare"}
     for ws in wb.worksheets:
         if ws.title not in visible_sheets:
             ws.sheet_state = "hidden"
@@ -1744,7 +1640,6 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     def format_avanzamento_like_sheet(sheet_name):
         if sheet_name not in wb.sheetnames:
             return
-
         ws = wb[sheet_name]
         header = [c.value for c in ws[1]]
 
@@ -1753,38 +1648,33 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             "Ultima attività 2 mesi precedenti": label_m2,
             "Ultima attività mese precedente": label_m1,
             "Ultima attività": label_cur,
+            "Ultima attività nel periodo": f"Ultima attività {periodo_label}",
+            "Migliore attività nel periodo": f"Migliore attività {periodo_label}",
             "PREVENTIVATO_STORICO_EUR": "Preventivato Storico €",
             "DELIBERATO_STORICO_EUR": "Deliberato Storico €",
-            "PREVENTIVATO_PERIODO_EUR": "Preventivato Periodo €",
-            "DELIBERATO_PERIODO_EUR": "Deliberato Periodo €",
-            "N_PREVENTIVI_PERIODO": "N° Preventivi Periodo",
-            "N_DELIBERE_PERIODO": "N° Delibere Periodo",
+            "PREVENTIVATO_PERIODO_EUR": f"Preventivato € {periodo_label}",
+            "DELIBERATO_PERIODO_EUR": f"Deliberato € {periodo_label}",
+            "N_PREVENTIVI_PERIODO": f"N° Preventivi {periodo_label}",
+            "N_DELIBERE_PERIODO": f"N° Delibere {periodo_label}",
         }
 
         for raw, pretty in rename_map.items():
             if raw in header:
                 idx = header.index(raw) + 1
                 ws.cell(row=1, column=idx).value = pretty
-
                 if "EUR" in raw:
                     for r in range(2, ws.max_row + 1):
                         ws.cell(r, idx).number_format = u'€ #,##0.00'
 
         header = [c.value for c in ws[1]]
-
         if "Data ultima delibera" in header:
             idx = header.index("Data ultima delibera") + 1
             for r in range(2, ws.max_row + 1):
                 ws.cell(r, idx).number_format = "dd/mm/yyyy"
 
-        hidden_headers = {
-            "Stadio_Riferimento",
-            "Famiglia_Stadio",
-            "Trend_Mensile",
-            "Stato_Relazione",
-            "Anomalia"
-        }
-
+        # Nasconde le colonne tecniche: restano nel file, ma non sporcano la lettura operativa.
+        header = [c.value for c in ws[1]]
+        hidden_headers = {"Stadio_Riferimento", "Famiglia_Stadio", "Trend_Mensile", "Stato_Relazione", "Anomalia"}
         for c_idx, h in enumerate(header, start=1):
             if h in hidden_headers:
                 ws.column_dimensions[get_column_letter(c_idx)].hidden = True
@@ -1792,7 +1682,33 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     for sname in ["Avanzamento_Clienti", "Da_Riassegnare", "Da_Attenzionare", "Anomalie"]:
         format_avanzamento_like_sheet(sname)
 
-    # Analisi_TC formatting
+    euro_format = u'€ #,##0.00'
+    euro_cols = [9, 10, 11, 12]
+
+    type_sheets = [
+        s for s in wb.sheetnames
+        if s not in (
+            "00_Regole_RA", "Analisi_TC",
+            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
+            "Sintesi_Avanzamento", "Sintesi_Stato", "Sintesi_Per_Referente",
+            "Da_Riassegnare", "Da_Attenzionare", "Anomalie"
+        )
+    ]
+
+    for sname in type_sheets:
+        ws = wb[sname]
+        for col_idx in euro_cols:
+            cur = ws.cell(row=1, column=col_idx).value
+            if cur in header_overrides:
+                ws.cell(row=1, column=col_idx).value = header_overrides[cur]
+        for r in range(2, ws.max_row + 1):
+            for c in euro_cols:
+                ws.cell(row=r, column=c).number_format = euro_format
+
+    GREEN = PatternFill(fill_type="solid", fgColor="C6EFCE")
+    RED   = PatternFill(fill_type="solid", fgColor="FFC7CE")
+    YELLOW = PatternFill(fill_type="solid", fgColor="FFF2CC")
+
     if "Analisi_TC" in wb.sheetnames:
         ws = wb["Analisi_TC"]
         ws.freeze_panes = "A2"
@@ -1801,12 +1717,10 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             "PREVENTIVI_AMM": "PREVENTIVI AMM.",
             "DELIBERE_AMM": "DELIBERE AMM.",
             "VENDUTO_AMM": "VENDUTO AMM.",
-            "PRODOTTO_AMM": "PRODOTTO AMM.",
             "FATTURATO_AMM": "FATTURATO AMM.",
             "INCASSATO_AMM": "INCASSATO AMM.",
             "CLIENTI_CON_DELIBERA": "CLIENTI CON DELIBERA",
         }
-
         for cell in ws[1]:
             if cell.value in rename_map_tc:
                 cell.value = rename_map_tc[cell.value]
@@ -1814,51 +1728,30 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
         header = [c.value for c in ws[1]]
-
-        euro_headers = {
-            "VENDUTO", "VENDUTO AMM.",
-            "PRODOTTO", "PRODOTTO AMM.",
-            "FATTURATO", "FATTURATO AMM.",
-            "INCASSATO", "INCASSATO AMM.",
-            "DELIBERA MEDIA"
-        }
-
-        pct_headers = {
-            "% PREV. AMM.",
-            "% DEL. AMM.",
-            "% VENDUTO AMM.",
-            "% PRODOTTO AMM.",
-            "% FATT. AMM.",
-            "% INC. AMM.",
-            "% CHIUSURA"
-        }
+        euro_headers = {"VENDUTO", "VENDUTO AMM.", "DELIBERA MEDIA"}
+        pct_headers = {"% PREV. AMM.", "% DEL. AMM.", "% VENDUTO AMM.", "% CHIUSURA"}
 
         for c_idx, h in enumerate(header, start=1):
             if h in euro_headers:
                 for r in range(2, ws.max_row + 1):
                     ws.cell(r, c_idx).number_format = u'€ #,##0.00'
-
             if h in pct_headers:
                 for r in range(2, ws.max_row + 1):
                     ws.cell(r, c_idx).number_format = '0%'
 
+        # Evidenzia la riga TOTALE.
         for r in range(2, ws.max_row + 1):
             if str(ws.cell(r, 1).value or "").strip().upper() == "TOTALE":
                 for c in range(1, ws.max_column + 1):
                     ws.cell(r, c).font = Font(bold=True)
                     ws.cell(r, c).fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
 
-    # Avanzamento no colori, solo header pulito
     if "Avanzamento_Clienti" in wb.sheetnames:
         ws = wb["Avanzamento_Clienti"]
         ws.freeze_panes = "A2"
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    # Da_Riassegnare in rosso
-    RED = PatternFill(fill_type="solid", fgColor="FFC7CE")
-    YELLOW = PatternFill(fill_type="solid", fgColor="FFF2CC")
 
     if "Da_Riassegnare" in wb.sheetnames:
         ws = wb["Da_Riassegnare"]
@@ -1882,51 +1775,59 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         ws = wb["00_Regole_RA"]
         ws.column_dimensions["A"].width = 38
         ws.column_dimensions["B"].width = 120
-
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-
         for row in ws.iter_rows(min_row=2):
             for cell in row:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-    euro_format = u'€ #,##0.00'
-    euro_cols = [9, 10, 11, 12]
-
-    type_sheets = [
-        s for s in wb.sheetnames
+    admin_sheet = None
+    for s in wb.sheetnames:
         if s not in (
             "00_Regole_RA", "Analisi_TC",
-            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti",
+            "Riepilogo", "Corrispondenza", "Avanzamento_Clienti"
             "Sintesi_Avanzamento", "Sintesi_Stato", "Sintesi_Per_Referente",
             "Da_Riassegnare", "Da_Attenzionare", "Anomalie"
-        )
-    ]
+        ) and "amministr" in s.lower():
+            admin_sheet = s
+            break
 
-    for sname in type_sheets:
-        ws = wb[sname]
+    if admin_sheet:
+        ws = wb[admin_sheet]
+        header = [c.value for c in ws[1]]
+        try:
+            col_anno = header.index("Anno_Ultima_Attivita") + 1
+            col_mese = header.index("Mese_Ultima_Attivita") + 1
+            max_col = ws.max_column
+            cutoff = date.today() - relativedelta(months=2)
+            cutoff_period = cutoff.year * 100 + cutoff.month
 
-        for col_idx in euro_cols:
-            cur = ws.cell(row=1, column=col_idx).value
-            if cur in header_overrides:
-                ws.cell(row=1, column=col_idx).value = header_overrides[cur]
-
-        for r in range(2, ws.max_row + 1):
-            for c in euro_cols:
-                ws.cell(row=r, column=c).number_format = euro_format
+            for r in range(2, ws.max_row + 1):
+                anno = ws.cell(r, col_anno).value
+                mese = ws.cell(r, col_mese).value
+                if anno is None or mese is None or str(anno).strip() == "" or str(mese).strip() == "":
+                    fill = RED
+                else:
+                    try:
+                        period = int(anno) * 100 + int(mese)
+                        fill = RED if period < cutoff_period else GREEN
+                    except:
+                        fill = RED
+                for c in range(1, max_col + 1):
+                    ws.cell(r, c).fill = fill
+        except:
+            pass
 
     for ws in wb.worksheets:
         for col_idx, col_cells in enumerate(ws.columns, start=1):
             if ws.title == "00_Regole_RA" and col_idx in (1, 2):
                 continue
-
             max_len = 0
             for cell in list(col_cells)[:2000]:
                 if cell.value is None:
                     continue
                 max_len = max(max_len, len(str(cell.value)))
-
             ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 45)
 
 out.seek(0)
@@ -1937,7 +1838,6 @@ OUT_BYTES = out.read()
 
     const outBytes = pyodide.globals.get("OUT_BYTES");
     const u8 = new Uint8Array(outBytes.toJs());
-
     const blob = new Blob([u8], {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     });

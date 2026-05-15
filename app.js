@@ -1240,7 +1240,6 @@ adv_cols = [
     "Mesi_senza_miglioramento",
     "Da_Riassegnare",
     "Da_Attenzionare",
-    "Esito_Manageriale",
     "Azione_Consigliata",
     "Anomalia",
 ]
@@ -1284,7 +1283,6 @@ regole_ra = pd.DataFrame([
     ["MESI_SENZA_MIGLIORAMENTO", "Conta da quanti mesi l’amministratore non supera il miglior livello già raggiunto. Se nello storico è presente Delibera, il valore viene posto a 0 perché oltre Delibera non si può migliorare."],
     ["DA_RIASSEGNARE = SI", "Sugli stadi deboli è più severo. Sugli stadi forti è più tollerante. Delibera non viene trattata come cliente da riassegnare solo perché non migliora."],
     ["DA_ATTENZIONARE = SI", "Scatta nei casi da monitorare, con logica diversa a seconda della famiglia dello stadio."],
-    ["ESITO_MANAGERIALE", "Sintesi automatica del caso, ora allineata anche allo Stato_Relazione: Fidelizzato, Convertito, Da riattivare, Dormiente, Da attivare, Caldo, In sviluppo, Critico, oltre agli stati operativi come Chiuso, Positivo, Da monitorare, Bloccato, Anomalo."],
     ["AZIONE_CONSIGLIATA", "Suggerimento operativo automatico: monitorare, sostenere avanzamento, verificare blocco, controllo manuale, valutare riassegnazione, ecc."],
     ["ANOMALIA = SI", "Segnala casi incoerenti, per esempio regressioni sospette o ritorni a stadi inferiori dopo livelli più alti."],
     ["FOGLIO DA_RIASSEGNARE", "Contiene solo i casi più critici che meritano valutazione di riassegnazione."],
@@ -1483,6 +1481,11 @@ analisi_tc = analisi_tc[[
     "POTENZIALI CON RICHIESTA",
 ]].copy()
 
+# Elimina dall'Analisi_TC i TC completamente a zero, così il foglio resta leggibile.
+metric_cols_tc = [c for c in analisi_tc.columns if c != "TC" and not c.startswith("%")]
+if len(metric_cols_tc):
+    analisi_tc = analisi_tc[analisi_tc[metric_cols_tc].sum(axis=1) != 0].copy()
+
 # Riga totale con percentuali ricalcolate sui totali.
 tot = {c: 0 for c in analisi_tc.columns}
 tot["TC"] = "TOTALE"
@@ -1671,36 +1674,10 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
 
     if "Avanzamento_Clienti" in wb.sheetnames:
         ws = wb["Avanzamento_Clienti"]
-        header = [c.value for c in ws[1]]
-        try:
-            col_trend = header.index("Trend_Mensile") + 1
-            col_dr = header.index("Da_Riassegnare") + 1
-            col_da = header.index("Da_Attenzionare") + 1
-            max_col = ws.max_column
-
-            for r in range(2, ws.max_row + 1):
-                trend = str(ws.cell(r, col_trend).value or "").strip()
-                dr = str(ws.cell(r, col_dr).value or "").strip()
-                da = str(ws.cell(r, col_da).value or "").strip()
-
-                fill = None
-                if dr == "Si":
-                    fill = RED
-                elif da == "Si":
-                    fill = YELLOW
-                else:
-                    if trend in ("Avanza", "Riparte", "Deliberato"):
-                        fill = GREEN
-                    elif trend in ("Fermo", "Arretra", "Nessuna attività"):
-                        fill = RED
-                    elif trend in ("Stabile", "Dormiente", "Da verificare"):
-                        fill = YELLOW
-
-                if fill:
-                    for c in range(1, max_col + 1):
-                        ws.cell(r, c).fill = fill
-        except:
-            pass
+        ws.freeze_panes = "A2"
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     if "Da_Riassegnare" in wb.sheetnames:
         ws = wb["Da_Riassegnare"]

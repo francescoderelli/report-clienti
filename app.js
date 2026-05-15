@@ -1428,7 +1428,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     if "Analisi_TC" in wb.sheetnames:
         wb.active = wb.sheetnames.index("Analisi_TC")
 
-    visible_sheets = {"Analisi_TC", "Avanzamento_Clienti", "Sintesi_Per_Referente", "Da_Riassegnare"}
+    visible_sheets = {"Analisi_TC", "Avanzamento_Clienti"}
     for ws in wb.worksheets:
         if ws.title not in visible_sheets:
             ws.sheet_state = "hidden"

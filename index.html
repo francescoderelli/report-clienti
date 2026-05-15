@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <title>Report Clienti</title>
+
+  <link rel="icon" href="favicon.ico" type="image/x-icon" />
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Pyodide -->
+  <script defer src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+
+  <!-- FileSaver -->
+  <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+
+  <!-- App -->
+  <script defer src="app.js?v=20260515_01"></script>
+</head>
+
+<body>
+  <div id="loadingOverlay" class="loadingOverlay hidden">
+    <div class="loadingBox">
+      <div class="bigSpinner"></div>
+      <div class="loadingTitle">Elaborazione in corso</div>
+      <div class="loadingText">Attendi qualche secondo...</div>
+    </div>
+  </div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brandLogo">A</div>
+        <div class="brandText">
+          <div class="brandName">Report Clienti</div>
+          <div class="brandSub">Upload &amp; Genera Excel</div>
+        </div>
+      </div>
+
+      <div class="sideCard">
+        <div class="sideTitle">Nota</div>
+        <div class="sideText">
+          I file restano sul tuo PC: vengono letti dal browser e l’output viene scaricato localmente.
+        </div>
+      </div>
+
+      <div class="sideCard">
+        <div class="sideTitle">File richiesti</div>
+        <div class="sideText">
+          Carica tutti e tre i file richiesti. Il pulsante “Genera report” si abilita solo dopo la verifica positiva.
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="pageTitle">Report Clienti</div>
+          <div class="pageSubtitle">Carica i file da Albert e genera il report Excel</div>
+        </div>
+      </header>
+
+      <section class="content">
+        <section class="panel">
+          <div class="panelHead">
+            <div>
+              <div class="panelTitle">Generatore Report</div>
+              <div class="panelSubtitle">Carica i 3 file richiesti</div>
+            </div>
+          </div>
+
+          <div class="panelBody">
+            <div class="formGrid">
+
+              <div class="field">
+                <label for="fileTabella">1. Tabella Clienti (.xlsx)</label>
+                <input id="fileTabella" type="file" accept=".xlsx" />
+
+                <div id="statusTab" class="fileStatus hidden">
+                  <span class="spinner"></span>
+                  <span class="fileStatusText">Verifica in corso...</span>
+                </div>
+
+                <div class="hint">
+                  Scaricalo da <b>Dashboard commerciale</b> &gt;
+                  <b>Customers Summary / Riepilogo Clienti</b> &gt;
+                  seleziona la sede &gt; in fondo pagina scarica
+                  <b>“Tabella Clienti (no filtro data)”</b>.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="fileSum">2. Sum_of / Sottoprodotti (.xlsx)</label>
+                <input id="fileSum" type="file" accept=".xlsx" />
+
+                <div id="statusSum" class="fileStatus hidden">
+                  <span class="spinner"></span>
+                  <span class="fileStatusText">Verifica in corso...</span>
+                </div>
+
+                <div class="hint">
+                  Scaricalo da <b>Dashboard commerciale</b> &gt;
+                  <b>By-Products / Sottoprodotti</b> &gt;
+                  seleziona sede &gt; seleziona il periodo che ti interessa &gt;
+                  in fondo pagina scarica il file dall’ultima tabella
+                  <b>“sottoprodotti divisi per classe attività”</b>.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="fileStati">3. STATI Pratiche (.xlsx)</label>
+                <input id="fileStati" type="file" accept=".xlsx" />
+
+                <div id="statusStati" class="fileStatus hidden">
+                  <span class="spinner"></span>
+                  <span class="fileStatusText">Verifica in corso...</span>
+                </div>
+
+                <div class="hint">
+                  Scaricalo da <b>Dashboard commerciale</b> &gt;
+                  <b>Practices Lists / Elenchi Pratiche</b> &gt;
+                  seleziona sede &gt; seleziona lo stesso periodo dei sottoprodotti &gt;
+                  scarica il file dalla terza tabella
+                  <b>“STATI Pratiche create nell’anno”</b>.
+                </div>
+              </div>
+
+              <div class="actions">
+                <button id="btnRun" class="primaryBtn" disabled>Genera report</button>
+              </div>
+
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL ERRORE -->
+  <div id="errModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="errTitle">
+    <div class="modalBox err">
+      <div class="modalIcon errIcon">!</div>
+      <div id="errTitle" class="modalTitle">File errato</div>
+      <div id="errText" class="modalText">Carica il file corretto e riprova.</div>
+      <button id="errOk" class="modalBtn errBtn">OK</button>
+    </div>
+  </div>
+
+  <!-- MODAL OK -->
+  <div id="okModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="okTitle">
+    <div class="modalBox ok">
+      <div class="modalIcon okIcon">✓</div>
+      <div id="okTitle" class="modalTitle">File OK</div>
+      <div id="okText" class="modalText">File verificato correttamente.</div>
+      <button id="okOk" class="modalBtn okBtn">OK</button>
+    </div>
+  </div>
+</body>
+</html>

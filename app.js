@@ -1408,7 +1408,7 @@ anomalie_df = avanzamento_clienti[avanzamento_clienti["Anomalia"] == "Si"].copy(
 # Obiettivo: riepilogo manageriale per TC con produzione commerciale,
 # peso amministratori e stato del portafoglio amministratori.
 clients_tc = clients.copy()
-clients_tc["TC"] = clients_tc["Referente_Commerciale"].fillna("").astype(str).str.strip()
+clients_tc["TC"] = clients_tc["Referente_Commerciale"].apply(format_tc_name)
 clients_tc = clients_tc[clients_tc["TC"] != ""].copy()
 clients_tc["Is_Admin"] = clients_tc["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 clients_tc["Status_Bucket"] = clients_tc["Status_Cliente"].apply(status_bucket)
@@ -1418,7 +1418,7 @@ sumdf_tc = sumdf.merge(
     on="ID_Soggetto",
     how="left"
 )
-sumdf_tc["TC"] = sumdf_tc["Chi"].fillna("").astype(str).str.strip()
+sumdf_tc["TC"] = sumdf_tc["Chi"].apply(format_tc_name)
 sumdf_tc = sumdf_tc[sumdf_tc["TC"] != ""].copy()
 sumdf_tc["Is_Admin"] = sumdf_tc["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 
@@ -1445,7 +1445,7 @@ delib_tc = delibere_latest.merge(
 ) if len(delibere_latest) else pd.DataFrame(columns=list(delibere_latest.columns) + ["Tipo"])
 
 if len(delib_tc):
-    delib_tc["TC"] = delib_tc["Chi"].fillna("").astype(str).str.strip()
+    delib_tc["TC"] = delib_tc["Chi"].apply(format_tc_name)
     delib_tc = delib_tc[delib_tc["TC"] != ""].copy()
     delib_tc["Is_Admin"] = delib_tc["Tipo"].astype(str).str.strip().str.lower().eq("amministratore")
 else:
@@ -1473,18 +1473,19 @@ for col in ["ATTIVO", "SEMI ATTIVO", "INATTIVO", "PERSI", "POTENZIALI", "POTENZI
     if col not in status_counts.columns:
         status_counts[col] = 0
 
+avanzamento_tc = avanzamento_clienti.copy()
+avanzamento_tc["TC"] = avanzamento_tc["Referente_Commerciale"].apply(format_tc_name)
+
 clienti_con_delibera = (
-    avanzamento_clienti[avanzamento_clienti["N_DELIBERE_PERIODO"] > 0]
-    .groupby("Referente_Commerciale", as_index=False)
+    avanzamento_tc[avanzamento_tc["N_DELIBERE_PERIODO"] > 0]
+    .groupby("TC", as_index=False)
     .agg(CLIENTI_CON_DELIBERA=("Cliente", "nunique"))
-    .rename(columns={"Referente_Commerciale": "TC"})
 )
 
 fidelizzati_tc = (
-    avanzamento_clienti[avanzamento_clienti["Stato_Relazione"] == "Fidelizzato"]
-    .groupby("Referente_Commerciale", as_index=False)
+    avanzamento_tc[avanzamento_tc["Stato_Relazione"] == "Fidelizzato"]
+    .groupby("TC", as_index=False)
     .agg(FIDELIZZATI=("Cliente", "nunique"))
-    .rename(columns={"Referente_Commerciale": "TC"})
 )
 
 tc_list = pd.DataFrame({
@@ -1518,7 +1519,9 @@ analisi_tc["% PREV. AMM."] = analisi_tc.apply(lambda r: safe_div(r["PREVENTIVI_A
 analisi_tc["% DEL. AMM."] = analisi_tc.apply(lambda r: safe_div(r["DELIBERE_AMM"], r["DELIBERE"]), axis=1)
 analisi_tc["% VENDUTO AMM."] = analisi_tc.apply(lambda r: safe_div(r["VENDUTO_AMM"], r["VENDUTO"]), axis=1)
 analisi_tc["% CHIUSURA"] = analisi_tc.apply(lambda r: safe_div(r["DELIBERE"], r["PREVENTIVI"]), axis=1)
+analisi_tc["% CHIUSURA AMM."] = analisi_tc.apply(lambda r: safe_div(r["DELIBERE_AMM"], r["PREVENTIVI_AMM"]), axis=1)
 analisi_tc["DELIBERA MEDIA"] = analisi_tc.apply(lambda r: safe_div(r["VENDUTO"], r["DELIBERE"]), axis=1)
+analisi_tc["DELIBERA MEDIA AMM."] = analisi_tc.apply(lambda r: safe_div(r["VENDUTO_AMM"], r["DELIBERE_AMM"]), axis=1)
 
 analisi_tc = analisi_tc[[
     "TC",
@@ -1532,7 +1535,9 @@ analisi_tc = analisi_tc[[
     "VENDUTO_AMM",
     "% VENDUTO AMM.",
     "% CHIUSURA",
+    "% CHIUSURA AMM.",
     "DELIBERA MEDIA",
+    "DELIBERA MEDIA AMM.",
     "CLIENTI_CON_DELIBERA",
     "FIDELIZZATI",
     "ATTIVO",
@@ -1558,7 +1563,9 @@ tot["% PREV. AMM."] = safe_div(tot["PREVENTIVI_AMM"], tot["PREVENTIVI"])
 tot["% DEL. AMM."] = safe_div(tot["DELIBERE_AMM"], tot["DELIBERE"])
 tot["% VENDUTO AMM."] = safe_div(tot["VENDUTO_AMM"], tot["VENDUTO"])
 tot["% CHIUSURA"] = safe_div(tot["DELIBERE"], tot["PREVENTIVI"])
+tot["% CHIUSURA AMM."] = safe_div(tot["DELIBERE_AMM"], tot["PREVENTIVI_AMM"])
 tot["DELIBERA MEDIA"] = safe_div(tot["VENDUTO"], tot["DELIBERE"])
+tot["DELIBERA MEDIA AMM."] = safe_div(tot["VENDUTO_AMM"], tot["DELIBERE_AMM"])
 
 analisi_tc = pd.concat([analisi_tc.sort_values("VENDUTO", ascending=False), pd.DataFrame([tot])], ignore_index=True)
 
@@ -1728,8 +1735,8 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
         header = [c.value for c in ws[1]]
-        euro_headers = {"VENDUTO", "VENDUTO AMM.", "DELIBERA MEDIA"}
-        pct_headers = {"% PREV. AMM.", "% DEL. AMM.", "% VENDUTO AMM.", "% CHIUSURA"}
+        euro_headers = {"VENDUTO", "VENDUTO AMM.", "DELIBERA MEDIA", "DELIBERA MEDIA AMM."}
+        pct_headers = {"% PREV. AMM.", "% DEL. AMM.", "% VENDUTO AMM.", "% CHIUSURA", "% CHIUSURA AMM."}
 
         for c_idx, h in enumerate(header, start=1):
             if h in euro_headers:
@@ -1737,7 +1744,7 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                     ws.cell(r, c_idx).number_format = u'€ #,##0.00'
             if h in pct_headers:
                 for r in range(2, ws.max_row + 1):
-                    ws.cell(r, c_idx).number_format = '0%'
+                    ws.cell(r, c_idx).number_format = '0.00%'
 
         # Evidenzia la riga TOTALE.
         for r in range(2, ws.max_row + 1):
@@ -1820,6 +1827,14 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             pass
 
     for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(
+                    horizontal=cell.alignment.horizontal,
+                    vertical="center",
+                    wrap_text=True
+                )
+
         for col_idx, col_cells in enumerate(ws.columns, start=1):
             if ws.title == "00_Regole_RA" and col_idx in (1, 2):
                 continue

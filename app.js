@@ -1363,6 +1363,11 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
     if "Avanzamento_Clienti" in wb.sheetnames:
         ws = wb["Avanzamento_Clienti"]
         ws.freeze_panes = "A2"
+
+        # Colonna B: intestazione più pulita
+        if ws.max_column >= 2:
+            ws.cell(row=1, column=2).value = "Commerciale"
+
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -1417,15 +1422,18 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
                 ws.cell(row=r, column=c).number_format = euro_format
 
     # Bordi: sottili sulle celle interne, spessi sulle intestazioni.
-    thin_side = Side(style="thin", color="D9D9D9")
+    thin_side = Side(style="thin", color="BFBFBF")
     thick_side = Side(style="medium", color="000000")
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     header_border = Border(left=thick_side, right=thick_side, top=thick_side, bottom=thick_side)
 
     for ws in wb.worksheets:
-        for row in ws.iter_rows():
+        # Bordo fine su tutta la tabella interna realmente usata
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
             for cell in row:
                 cell.border = thin_border
+
+        # Bordo più spesso sulle intestazioni
         for cell in ws[1]:
             cell.border = header_border
             cell.font = Font(bold=True)

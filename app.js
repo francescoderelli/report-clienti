@@ -1036,22 +1036,24 @@ else:
     prev1 = None
     prev2 = None
 
-def mese_nome_da_periodo(periodo):
+def mese_anno_da_periodo(periodo):
     mesi_it = {
         1: "gennaio", 2: "febbraio", 3: "marzo", 4: "aprile",
         5: "maggio", 6: "giugno", 7: "luglio", 8: "agosto",
         9: "settembre", 10: "ottobre", 11: "novembre", 12: "dicembre"
     }
     try:
-        mese = int(periodo) % 100
-        return mesi_it.get(mese, str(periodo))
+        periodo_int = int(periodo)
+        anno = periodo_int // 100
+        mese = periodo_int % 100
+        return f"{mesi_it.get(mese, str(mese))} {anno}"
     except:
         return "periodo"
 
-label_old = f"Ultima attività prima di {mese_nome_da_periodo(prev2)}" if prev2 is not None else "Ultima attività prima del periodo"
-label_m2 = f"Ultima attività {mese_nome_da_periodo(prev2)}" if prev2 is not None else "Ultima attività mese -2"
-label_m1 = f"Ultima attività {mese_nome_da_periodo(prev1)}" if prev1 is not None else "Ultima attività mese precedente"
-label_cur = f"Attività {mese_nome_da_periodo(max_period)}" if max_period is not None else "Attività ultimo mese"
+label_old = f"Ultima attività prima di {mese_anno_da_periodo(prev2)}" if prev2 is not None else "Ultima attività prima del periodo"
+label_m2 = f"Ultima attività {mese_anno_da_periodo(prev2)}" if prev2 is not None else "Ultima attività mese -2"
+label_m1 = f"Ultima attività {mese_anno_da_periodo(prev1)}" if prev1 is not None else "Ultima attività mese precedente"
+label_cur = f"Attività {mese_anno_da_periodo(max_period)}" if max_period is not None else "Attività ultimo mese"
 
 admin_months = best_in_month.merge(
     admins_base[["ID_Soggetto"]],

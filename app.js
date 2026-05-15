@@ -1036,6 +1036,23 @@ else:
     prev1 = None
     prev2 = None
 
+def mese_nome_da_periodo(periodo):
+    mesi_it = {
+        1: "gennaio", 2: "febbraio", 3: "marzo", 4: "aprile",
+        5: "maggio", 6: "giugno", 7: "luglio", 8: "agosto",
+        9: "settembre", 10: "ottobre", 11: "novembre", 12: "dicembre"
+    }
+    try:
+        mese = int(periodo) % 100
+        return mesi_it.get(mese, str(periodo))
+    except:
+        return "periodo"
+
+label_old = f"Ultima attività prima di {mese_nome_da_periodo(prev2)}" if prev2 is not None else "Ultima attività prima del periodo"
+label_m2 = f"Ultima attività {mese_nome_da_periodo(prev2)}" if prev2 is not None else "Ultima attività mese -2"
+label_m1 = f"Ultima attività {mese_nome_da_periodo(prev1)}" if prev1 is not None else "Ultima attività mese precedente"
+label_cur = f"Attività {mese_nome_da_periodo(max_period)}" if max_period is not None else "Attività ultimo mese"
+
 admin_months = best_in_month.merge(
     admins_base[["ID_Soggetto"]],
     on="ID_Soggetto",
@@ -1265,10 +1282,10 @@ regole_ra = pd.DataFrame([
     ["STATUS CLIENTI IN ANALISI_TC", "Attivo, Semi Attivo, Inattivo, Persi, Potenziali e Potenziali con Richiesta vengono presi dalla colonna Q della Tabella Clienti. Inattivo significa cliente che ha lavorato in passato e oggi non più; Potenziale significa cliente che non ha ancora lavorato."],
     ["STADIO_RIFERIMENTO", "Rappresenta lo stadio commerciale più utile raggiunto: usa prima la Migliore attività nel periodo, poi la vera ultima attività nel periodo e infine lo storico precedente. Serve per non perdere una delibera solo perché dopo è stata fatta una telefonata."],
     ["FAMIGLIA_STADIO", "Calcolata sullo Stadio_Riferimento. Debole = Appuntamento/Telefonata/Incontro. Intermedio = Sopralluogo. Forte = Richiesta/Preventivo. Convertito = Delibera."],
-    ["ULTIMA ATTIVITÀ OLTRE 2 MESI PRECEDENTI", "Migliore attività trovata in tutti i mesi precedenti rispetto ai 2 mesi più recenti del file Sum_of."],
-    ["ULTIMA ATTIVITÀ 2 MESI PRECEDENTI", "Migliore attività del mese pari a ultimo mese del file meno 2."],
-    ["ULTIMA ATTIVITÀ MESE PRECEDENTE", "Migliore attività del mese pari a ultimo mese del file meno 1."],
-    ["ATTIVITÀ ULTIMO MESE", "Indica la migliore attività svolta nell’ultimo mese presente nel file Sum_of."],
+    [label_old.upper(), "Migliore attività trovata in tutti i mesi precedenti rispetto al mese -2 del file Sum_of."],
+    [label_m2.upper(), "Migliore attività del mese -2 rispetto all’ultimo mese presente nel file Sum_of."],
+    [label_m1.upper(), "Migliore attività del mese precedente rispetto all’ultimo mese presente nel file Sum_of."],
+    [label_cur.upper(), "Migliore attività svolta nell’ultimo mese presente nel file Sum_of."],
     ["ATTIVITÀ ULTIMO MESE FATTA DA", "Indica chi ha fatto l’attività dell’ultimo mese, se presente."],
     ["ULTIMA ATTIVITÀ NEL PERIODO", "Indica la vera ultima attività cronologica rilevata per il cliente nel periodo caricato, anche se non è avvenuta nell’ultimo mese del file."],
     ["ULTIMA ATTIVITÀ FATTA DA", "Indica chi ha fatto la vera ultima attività cronologica nel periodo caricato."],
@@ -1582,7 +1599,10 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         header = [c.value for c in ws[1]]
 
         rename_map = {
-            "Ultima attività": "Attività ultimo mese",
+            "Ultima attività oltre 2 mesi precedenti": label_old,
+            "Ultima attività 2 mesi precedenti": label_m2,
+            "Ultima attività mese precedente": label_m1,
+            "Ultima attività": label_cur,
             "PREVENTIVATO_STORICO_EUR": "Preventivato Storico €",
             "DELIBERATO_STORICO_EUR": "Deliberato Storico €",
             "PREVENTIVATO_PERIODO_EUR": "Preventivato Periodo €",
@@ -1604,6 +1624,13 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
             idx = header.index("Data ultima delibera") + 1
             for r in range(2, ws.max_row + 1):
                 ws.cell(r, idx).number_format = "dd/mm/yyyy"
+
+        # Nasconde le colonne tecniche: restano nel file, ma non sporcano la lettura operativa.
+        header = [c.value for c in ws[1]]
+        hidden_headers = {"Stadio_Riferimento", "Famiglia_Stadio", "Trend_Mensile", "Stato_Relazione", "Anomalia"}
+        for c_idx, h in enumerate(header, start=1):
+            if h in hidden_headers:
+                ws.column_dimensions[get_column_letter(c_idx)].hidden = True
 
     for sname in ["Avanzamento_Clienti", "Da_Riassegnare", "Da_Attenzionare", "Anomalie"]:
         format_avanzamento_like_sheet(sname)

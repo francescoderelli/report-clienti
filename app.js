@@ -249,7 +249,7 @@ import re
 import numpy as np
 import pandas as pd
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 # =========================
 # HELPERS
@@ -1247,7 +1247,6 @@ header_overrides = {
 # =========================
 out = io.BytesIO()
 with pd.ExcelWriter(out, engine="openpyxl") as writer:
-    regole_ra.to_excel(writer, sheet_name="00_Regole_RA", index=False)
     analisi_tc.to_excel(writer, sheet_name="Analisi_TC", index=False)
     riepilogo = (
         final.assign(Tipo=final["Tipo"].fillna("Senza_Tipo"))
@@ -1284,10 +1283,10 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         df_t.copy()[output_cols].to_excel(writer, sheet_name=sheet, index=False)
 
     wb = writer.book
-    if "00_Regole_RA" in wb.sheetnames:
-        wb.active = wb.sheetnames.index("00_Regole_RA")
+    if "Analisi_TC" in wb.sheetnames:
+        wb.active = wb.sheetnames.index("Analisi_TC")
 
-    visible_sheets = {"00_Regole_RA", "Analisi_TC", "Avanzamento_Clienti", "Sintesi_Per_Referente", "Da_Riassegnare"}
+    visible_sheets = {"Analisi_TC", "Avanzamento_Clienti", "Sintesi_Per_Referente", "Da_Riassegnare"}
     for ws in wb.worksheets:
         if ws.title not in visible_sheets:
             ws.sheet_state = "hidden"
@@ -1416,6 +1415,20 @@ with pd.ExcelWriter(out, engine="openpyxl") as writer:
         for r in range(2, ws.max_row + 1):
             for c in euro_cols:
                 ws.cell(row=r, column=c).number_format = euro_format
+
+    # Bordi: sottili sulle celle interne, spessi sulle intestazioni.
+    thin_side = Side(style="thin", color="D9D9D9")
+    thick_side = Side(style="medium", color="000000")
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    header_border = Border(left=thick_side, right=thick_side, top=thick_side, bottom=thick_side)
+
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.border = thin_border
+        for cell in ws[1]:
+            cell.border = header_border
+            cell.font = Font(bold=True)
 
     # Larghezze fisse: nessuna larghezza automatica.
     for ws in wb.worksheets:
